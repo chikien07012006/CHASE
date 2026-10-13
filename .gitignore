@@ -1,0 +1,68 @@
+# Data: keep raw and processed datasets out of Git; document download/build steps in README.
+data/
+datasets/
+
+# Experiment outputs, checkpoints, logs
+outputs/
+results/
+checkpoints/
+runs/
+wandb/
+mlruns/
+*.log
+
+# Large or binary artifacts
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.h5
+*.parquet
+*.jsonl
+*.csv
+*.tsv
+*.zip
+*.tar
+*.tar.gz
+*.gz
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Environments and secrets
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# LaTeX build files
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.out
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+
+# OS and editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

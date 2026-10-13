@@ -1,0 +1,682 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T5]{fontenc}
+\usepackage[vietnamese]{babel}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[hidelinks]{hyperref}
+
+\newtheorem{definition}{Định nghĩa}
+\newtheorem{lemma}{Bổ đề}
+\newtheorem{theorem}{Định lý}
+\newtheorem{proposition}{Mệnh đề}
+\newtheorem{corollary}{Hệ quả}
+\theoremstyle{remark}
+\newtheorem{remark}{Nhận xét}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\G}{\mathcal{G}}
+\newcommand{\Aq}{A_q}
+\newcommand{\Sq}{S_q}
+\newcommand{\tauhat}{\hat{\tau}}
+\newcommand{\sbar}{\bar{s}}
+\newcommand{\method}{\textsc{CHASE}}
+\renewcommand{\algorithmicrequire}{\textbf{Đầu vào:}}
+\renewcommand{\algorithmicensure}{\textbf{Đầu ra:}}
+
+\title{\method: Conformal Heuristic Search with Exact Coverage\\
+for Multi-hop Evidence Retrieval on Knowledge Graphs\\[4pt]
+\large Đề xuất nghiên cứu (bản 3) --- chuyển hướng từ dự án MedMIG-CR}
+\author{Bản thảo thảo luận nội bộ}
+\date{Tháng 10/2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Phần~1 tóm tắt lý do dừng hướng cũ: chẩn đoán trên DDXPlus bằng MIND kết hợp beam search trên PrimeKG không tạo ra được đóng góp khoa học, vì encoder có giám sát đã giải gần trọn bài toán còn PrimeKG gần như không chứa tín hiệu chẩn đoán cho các bệnh của DDXPlus. Phần còn lại đề xuất \method{}, một thủ tục truy xuất bằng chứng nhiều bước trên đồ thị tri thức (KG). \method{} cắt nhánh \emph{ngay trong lúc search} bằng một scorer học được, với \emph{một} ngưỡng duy nhất hiệu chỉnh bằng conformal prediction. Điểm bất tương thích của mỗi câu hỏi được định nghĩa là \emph{ngưỡng nhỏ nhất để search tìm thấy đáp án}, và đây là một giá trị bottleneck tính chính xác được bằng quy hoạch động trên đồ thị trạng thái $(\text{node},\text{hop})$. Nhờ vậy: (i) đảm bảo $\Prob(\text{tìm thấy đáp án})\ge 1-\alpha$ đúng với mẫu hữu hạn, và \emph{không bảo thủ} (cận trên $1-\alpha+\tfrac{1}{n+1}$); (ii) search chính xác với chi phí đa thức, không cần beam hay trần cứng, nên mức coverage đạt được chỉ bị chặn bởi khả năng chạm tới đáp án trong $H$ hop của chính KG; (iii) ngân sách tự điều chỉnh theo từng câu hỏi; (iv) với câu hỏi nhiều đáp án, tỉ lệ bỏ sót được kiểm soát bằng conformal risk control từ cùng một lần chạy DP. So với hai công trình gần nhất: UaG hiệu chỉnh theo từng hop nên mất tính hoán đổi được; CPR có đảm bảo đúng nhưng chỉ lọc sau một search có beam cố định. Thực nghiệm chạy trên WebQSP và CWQ (so trực tiếp với UaG và CPR) và trên hai benchmark dựng từ PrimeKG đầy đủ (PrimeKGQA, BioHopR).
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%======================================================================
+\section{Lý do và bằng chứng cho việc dừng hướng cũ}
+%======================================================================
+
+\subsection{Tóm tắt hướng cũ}
+Pipeline cũ gồm bốn bước:
+\begin{enumerate}[nosep]
+  \item Ánh xạ bằng chứng lâm sàng của bệnh nhân DDXPlus \cite{ddxplus} thành các seed node trên PrimeKG \cite{primekg}.
+  \item Mã hoá tập seed thành $K$ interest vector bằng ClinicalMIND \cite{mind}, được gióng vào không gian node2vec bằng hàm mất mát InfoNCE.
+  \item Beam search ngữ nghĩa trên PrimeKG, có biến thể dẫn hướng theo khoảng cách tới tập target (kiểu A*).
+  \item Xếp hạng lại path bằng GRU.
+\end{enumerate}
+Mọi số liệu dưới đây dùng protocol đã chốt: train 50k, valid 5k, test 10k, lấy mẫu phân tầng theo pathology; không gian ứng viên là 47 target đã ánh xạ.
+
+\subsection{Bằng chứng 1: bộ mã hoá đứng riêng đã giải gần trọn bài toán}
+\emph{MIND-direct} xếp hạng 47 target theo $\max_k \cos(z_k, e_t)$, \textbf{không search}. Kết quả trên 1000 query validation, dùng cùng một checkpoint:
+
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+Cấu hình & MRR & R@1 & R@10 & Coverage \\
+\midrule
+Beam search gốc (không GRU) & 0.404 & 0.351 & 0.515 & 0.584 \\
+Beam search gốc + GRU & 0.465 & 0.426 & 0.536 & 0.584 \\
+Beam + dẫn hướng A* ($\lambda=0.3$), tốt nhất & 0.749 & 0.671 & 0.880 & 0.977 \\
+\textbf{MIND-direct (không search)} & \textbf{0.990} & \textbf{0.981} & \textbf{1.000} & -- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent\textbf{Nguyên nhân.} InfoNCE trên target kéo interest vector sát vào embedding của đúng bệnh, nên MIND thực chất là một bộ phân loại 47 lớp. Tại node target, điểm của beam xấp xỉ $\cos(z, e_t)$, đúng con số mà MIND-direct đọc thẳng. Beam chỉ thêm ràng buộc phải đi tới được target và nhiễu do cộng điểm dọc path, nên \emph{về mặt cấu trúc chỉ có thể làm mất thông tin}.
+
+\noindent\textbf{Phản biện ``MIND-direct không công bằng vì chỉ so với 47 node'' không đứng vững.}
+\begin{itemize}[nosep]
+  \item Pipeline cũ cũng dùng đúng 47 node này để thu path và lọc endpoint.
+  \item Khi mở rộng ứng viên, MIND-direct vẫn đạt MRR 0.937 trên 22{,}205 node bệnh, và MRR 0.670 với R@10 = 0.995 trên toàn bộ 82{,}240 node của PrimeKG.
+\end{itemize}
+
+\subsection{Bằng chứng 2: mọi mô hình có giám sát đều chạm trần}
+Trên test 10k, R-GCN (bản đã sửa lỗi, mỗi batch là một bước optimizer) đạt MRR 0.990 và R@1 0.981. MLP closed-set trước đây đạt MRR 0.991. DDXPlus là dữ liệu tổng hợp, sinh triệu chứng từ pathology theo luật, nên protocol closed 47 lớp \textbf{không còn phân biệt được phương pháp}.
+
+\subsection{Bằng chứng 3: PrimeKG gần như không chứa tín hiệu chẩn đoán cho DDXPlus}
+Xếp hạng 47 bệnh chỉ bằng KG (không nhãn, không train), trên 2000 query validation:
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+Tín hiệu chỉ từ KG & MRR & R@1 \\
+\midrule
+Ngẫu nhiên & 0.099 & 0.024 \\
+Số seed chạm target trong 2 hop & 0.121 & 0.034 \\
+Như trên, có trọng số IDF & 0.117 & 0.028 \\
+Số path độ dài 2 (chuẩn hoá) & 0.131 & 0.037 \\
+Cạnh trực tiếp \texttt{disease\_phenotype\_positive} & 0.096 & 0.019 \\
+Phenotype $\to$ phenotype cha $\to$ bệnh & 0.109 & 0.036 \\
+Cosine node2vec (trung bình các seed) & 0.100 & 0.025 \\
+Personalized PageRank (test 10k) & 0.146 & 0.067 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Các cạnh của 47 bệnh trong PrimeKG chủ yếu là \texttt{contraindication} (1161), \texttt{disease\_protein} (967) và \texttt{disease\_disease} (336). Chỉ có 294 cạnh \texttt{disease\_phenotype\_positive} cho cả 47 bệnh. Chú thích phenotype của PrimeKG (lấy từ HPO) thiên về bệnh hiếm và bệnh di truyền, trong khi DDXPlus gồm các bệnh phổ biến. Target thường cách seed của bệnh nhân 2 hop, và nhiều bệnh có degree rất thấp (Inguinal hernia: 1; Boerhaave: 1; Viral pharyngitis: 2).
+
+\subsection{Hệ quả}
+\begin{enumerate}[nosep]
+  \item Toàn bộ tri thức chẩn đoán đến từ nhãn DDXPlus, không đến từ KG. Câu hỏi ``search trên KG có giúp chẩn đoán không'' có câu trả lời là \emph{không} trên cặp dữ liệu này.
+  \item Hướng cứu vãn bằng zero-shot (giữ lại một số bệnh khi train) gần như chắc chắn thất bại, vì tín hiệu KG không nhãn chỉ ngang mức ngẫu nhiên.
+  \item Hướng ``path giải thích'' cũng yếu: path tới bệnh phải đi qua protein, thuốc hoặc chống chỉ định, nên khó có ý nghĩa lâm sàng.
+  \item Luận điểm multi-interest ($K>1$) không thể hiện được: mỗi bệnh nhân chỉ có một nhãn, và lần quét $K$ trước đây không thấy MRR tăng.
+  \item GRU reranker không nhận thông tin truy vấn, và làm giảm kết quả khi kết hợp với search A* (MRR từ 0.465 xuống 0.307).
+\end{enumerate}
+\textbf{Kết luận:} vấn đề nằm ở sự không khớp giữa bài toán, dataset và KG, không phải ở chi tiết thuật toán. Cần đổi bài toán, nhưng có thể giữ PrimeKG và phần lớn hạ tầng.
+
+
+%======================================================================
+\section{Bối cảnh và công trình liên quan}
+%======================================================================
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{3.6cm} >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}p{3.2cm}}
+\toprule
+Hướng & Công trình tiêu biểu & Nhận xét \\
+\midrule
+\textbf{Conformal cho KGQA nhiều bước} & \textbf{UaG} \cite{uag}; \textbf{CPR} \cite{cpr} & \textbf{Đối thủ trực tiếp}, xem mục~\ref{sec:closest} \\
+Conformal bên trong search và suy luận & Beam search có coverage \cite{confbeam}; PAC-CF \cite{pacf}; ITCR \cite{itcr}; Prune 'n Predict \cite{prunenpredict} & Sinh chuỗi, search do LLM dẫn hướng, đồ thị claim; không dùng cho KG \\
+Conformal cho RAG và KG & TRAQ \cite{traq}; lọc context \cite{confcontext}; tập đáp án KG \cite{confkg} & Lọc sau truy xuất, hoặc link prediction một bước \\
+Truy xuất subgraph nhẹ & SubgraphRAG \cite{subgraphrag} & Top-$K$ cố định, không có đảm bảo \\
+Suy luận trên KG có ưu tiên học được & NBFNet \cite{nbfnet}; A*Net \cite{astarnet} & Ngân sách node cố định \\
+Truy xuất trên STaRK-Prime (PrimeKG) & STaRK \cite{stark}; MoR \cite{mor}; ARK \cite{ark}; GRASP \cite{grasp}; SeedER \cite{seeder} & Tối ưu Hit@1; agent LLM hoặc RL; không có đảm bảo \\
+Agent LLM train bằng RL trên KG & Graph-R1 \cite{graphr1}; KG-R1 \cite{kgr1} & Tốn GPU, không có đảm bảo \\
+QA nhiều bước trên KG y sinh & PrimeKGQA \cite{primekgqa}; BioHopR \cite{biohopr}; AdaPath \cite{adapath}; MedHopQA \cite{medhopqa} & Nguồn dataset \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Hai công trình gần nhất: UaG và CPR}\label{sec:closest}
+
+\paragraph{UaG \cite{uag} (AAAI 2025).} Đặt ngưỡng conformal \emph{ngay trong} beam search trên KG. Có một ngưỡng chọn quan hệ, một ngưỡng chọn node láng giềng, và một ngưỡng ở bước so với đáp án do LLM sinh. Ba mức lỗi $(\alpha_1,\alpha_2,\alpha_3)$ được chọn bằng grid search theo Learn-Then-Test \cite{ltt}. Thí nghiệm trên WebQSP và CWQ (Freebase), dùng Llama-3-8B và SBERT (all-MiniLM-L6-v2) đã fine-tune. Link code trong bài (\texttt{github.com/Arstanley/UAG}) trả về 404 khi kiểm tra tháng 10/2026. Như vậy \textbf{``cắt nhánh conformal bên trong search trên KG'' đã có}; \method{} không thể nhận đây là đóng góp.
+
+\paragraph{CPR \cite{cpr} (arXiv 5/2026; code MIT tại \texttt{github.com/betterCallSherlock/CPR}).}
+\begin{itemize}[nosep]
+  \item \emph{Phê phán UaG:} ngưỡng ở hop $k$ là hàm của toàn bộ tập hiệu chỉnh, nên điểm ở các hop sau phụ thuộc chéo giữa các câu hỏi. Điều này vi phạm giả thiết hoán đổi được, và thực nghiệm của CPR cho thấy UaG không đạt coverage mục tiêu ở nhiều mức $\alpha$.
+  \item \emph{Cách làm:} mỗi câu hỏi có một điểm $S(q)=\min_{p\in\mathcal{P}^*_q}V'_\theta(p)$, tính trên \emph{path hoàn chỉnh} lấy từ search TreeG. TreeG có beam cố định: active set $A$, nhánh $B$, mặc định $32\times 32$, cộng một lần gọi Qwen3-8B mỗi câu hỏi để sinh gợi ý quan hệ. Ngưỡng chỉ dùng để \emph{lọc sau} search. Câu hỏi nào TreeG không tìm ra đáp án thì nhận $S(q)=+\infty$.
+  \item \emph{Protocol:} lấy 10\% tập train làm tập hiệu chỉnh (WebQSP 283 câu, CWQ 2{,}764 câu), test trên tập test chính thức, chỉ một lần chia cố định. Metric: ECR (tỉ lệ câu hỏi có ít nhất một đáp án đúng trong tập dự đoán) và APSS (kích thước trung bình của tập đáp án). Các bảng chính chỉ báo cáo $\alpha\in\{0.3,\dots,0.8\}$. Ở $\alpha=0.3$ trên WebQSP, ECR là 76.8\%.
+  \item \emph{Điều CPR không làm:} không báo cáo $\alpha<0.3$; không báo cáo recall của TreeG; không cắt nhánh trong search; không có ngân sách thích ứng; không thử trên KG y sinh; không có câu hỏi nhiều đáp án với kiểm soát tỉ lệ bỏ sót.
+\end{itemize}
+
+\paragraph{Một lỗ hổng lý thuyết chung.} Nếu $S(q)=+\infty$ xảy ra với hơn $\alpha$ phần câu hỏi, lượng tử $\tauhat$ bằng $+\infty$. Sự kiện $S(q_{\mathrm{test}})\le\tauhat$ khi đó luôn đúng nhưng \emph{không} kéo theo việc tìm thấy đáp án. Vì vậy đảm bảo của CPR chỉ có nghĩa khi $1-\alpha$ nhỏ hơn recall của TreeG. Mệnh đề~\ref{prop:ceiling} dưới đây phát biểu chặt điều này, và Định lý~\ref{thm:coverage} của \method{} xử lý đúng trường hợp $\tauhat=+\infty$.
+
+\subsection{Khoảng trống cho \method}
+\begin{enumerate}[nosep]
+  \item \textbf{Cắt nhánh trong search mà vẫn đúng và không bảo thủ.} UaG cắt trong search nhưng sai lý thuyết. CPR đúng nhưng chỉ lọc sau. Chia $\alpha$ theo hop bằng Bonferroni thì đúng nhưng bảo thủ. \method{} dùng một điểm duy nhất cho mỗi câu hỏi, bằng đúng ngưỡng nhỏ nhất để thành công, nên vừa đúng vừa chặt (Định lý~\ref{thm:coverage}).
+  \item \textbf{Search chính xác, không có beam.} Khi scorer phụ thuộc trạng thái $(v,h)$, cả việc tính điểm hiệu chỉnh lẫn search lúc test đều là quy hoạch động bottleneck chạy trong $O(H(|V|+|E|))$. Mức coverage đạt được chỉ bị chặn bởi việc KG có chạm được đáp án trong $H$ hop hay không, chứ không bởi beam.
+  \item \textbf{Ngân sách thích ứng:} số trạng thái được mở rộng thay đổi theo từng câu hỏi. Tập đáp án cũng có kích thước thay đổi, khác với conformal top-$K$ vốn cho mọi câu hỏi cùng một $K$.
+  \item \textbf{Nhiều đáp án:} kiểm soát tỉ lệ bỏ sót bằng CRC, tính chính xác từ giá trị bottleneck của từng đáp án. BioHopR có trung bình 36.65 đáp án mỗi câu.
+  \item \textbf{Huấn luyện scorer theo chi phí} ở mức coverage cố định, theo kiểu ConfTr \cite{conftr}.
+  \item \textbf{KG y sinh đầy đủ:} UaG và CPR chỉ thử trên Freebase. Nghiên cứu \cite{kgonlyhelps} trên PrimeKG cho thấy grounding bằng KG chỉ có ích khi sự kiện quyết định nằm ngoài dữ liệu LLM đã học. Giá trị của retriever vì thế nằm ở chỗ \emph{chắc chắn} đưa bằng chứng đúng vào context, một yêu cầu an toàn trong y sinh.
+\end{enumerate}
+
+%======================================================================
+\section{Phát biểu bài toán}
+%======================================================================
+
+\begin{definition}[Truy xuất bằng chứng nhiều bước có đảm bảo]
+Cho KG $\G=(V,\mathcal{R},E)$ và câu hỏi $q$, có tập thực thể chủ đề $\Sq\subseteq V$ và tập đáp án đúng $\Aq\subseteq V$. Mọi dataset dùng ở đây đều \emph{cho sẵn} $\Sq$, như cách UaG, CPR và SubgraphRAG làm, nên không cần entity linking. Cạnh được đi theo cả hai chiều; chiều là một phần của nhãn quan hệ. Một \emph{walk} độ dài $h\le H$ là $p=(v_0,r_1,v_1,\dots,r_h,v_h)$ với $v_0\in\Sq$. Thủ tục search trả về tập đáp án $R(q)\subseteq V$, kèm walk bằng chứng cho từng phần tử.
+\end{definition}
+
+\noindent\textbf{Yêu cầu.}
+\begin{align}
+\text{(Coverage)}\quad & \Prob\big(R(q)\cap\Aq\neq\emptyset\big)\ \ge\ 1-\alpha, \label{eq:cov}\\
+\text{(Nhiều đáp án)}\quad & \E\Big[1-\tfrac{|R(q)\cap\Aq|}{|\Aq|}\Big]\ \le\ \alpha, \label{eq:fnr}
+\end{align}
+trong đó xác suất lấy trên cả tập hiệu chỉnh lẫn câu hỏi test. \textbf{Mục tiêu tối ưu:} ở mức đảm bảo cho trước, tối thiểu hoá kích thước tập $|R(q)|$ (APSS) và chi phí search (số trạng thái mở rộng, thời gian chạy).
+
+\noindent\textbf{Trần coverage do KG.} Đặt $\rho_H=\Prob(\exists$ walk độ dài $\le H$ từ $\Sq$ tới $\Aq)$. Không phương pháp nào chỉ search trong $H$ hop có thể vượt $\rho_H$. Đây là trần chung cho mọi phương pháp, và sẽ được báo cáo cho từng dataset.
+
+%======================================================================
+\section{Phương pháp \method}\label{sec:method}
+%======================================================================
+
+\subsection{Tổng quan}
+\begin{enumerate}[nosep]
+  \item \textbf{Scorer theo trạng thái} (mục~\ref{sec:scorer}). Gán cho mỗi bước mở rộng $(h,u\xrightarrow{r}v)$ một điểm bất tương thích $s_h(q,r,v)\in\R$, và cho mỗi điểm dừng $(h,v)$ một điểm $s^{\mathrm{stop}}_h(q,v)$. Điểm thấp nghĩa là ``hứa hẹn''.
+  \item \textbf{Ràng buộc khả thi theo kiểu đáp án} (mục~\ref{sec:feas}, chỉ dùng cho PrimeKG): loại chính xác các trạng thái không thể tới một node có đúng kiểu đáp án trong số hop còn lại.
+  \item \textbf{Search theo ngưỡng}: chỉ đi qua các bước có điểm $\le\tau$. Tập đáp án gồm các node dừng được với điểm dừng $\le\tau$.
+  \item \textbf{Hiệu chỉnh conformal} (mục~\ref{sec:calib}): chọn $\tau$ từ các giá trị bottleneck $\sigma^*(q_i)$ trên tập hiệu chỉnh.
+  \item \textbf{Huấn luyện}: giai đoạn 1 dùng BCE; giai đoạn 2 dùng conformal training để giảm chi phí (mục~\ref{sec:train}).
+\end{enumerate}
+
+\subsection{Scorer theo trạng thái}\label{sec:scorer}
+Câu hỏi được mã hoá một lần bằng encoder văn bản đóng băng: $\mathbf{q}=\mathrm{Enc}(q)$. Encoder mặc định là \texttt{all-MiniLM-L6-v2}, giống UaG và CPR để so sánh công bằng; một ablation thay bằng BGE-base. Mỗi node có đặc trưng
+\[
+\psi_v=\big[\mathrm{Enc}(\text{tên}_v);\ \mathbf{n}_v;\ \mathrm{onehot}(\mathrm{type}(v));\ \log(1+\deg v)\big],
+\]
+trong đó $\mathbf{n}_v$ là embedding node2vec (chỉ có với PrimeKG). Mỗi quan hệ có hướng $r$ có đặc trưng $\phi_r=[\mathrm{Enc}(\text{tên}_r);\ \text{chiều}]$. Logit của bước mở rộng ở hop $h$ được \emph{phân rã} thành hai phần:
+\begin{equation}
+\ell_h(q,r,v)=\underbrace{f_\theta(\mathbf{q},\phi_r,h)}_{\text{tính cho }|\mathcal{R}|\times H\text{ cặp}}\ +\ \underbrace{\langle P_\theta\mathbf{q},\,Q_\theta\psi_v\rangle}_{\text{tích vô hướng theo node}},
+\qquad s_h(q,r,v)=-\log\sigma\big(\ell_h(q,r,v)\big),
+\end{equation}
+với $f_\theta$ là một MLP hai lớp và $P_\theta,Q_\theta$ là các phép chiếu tuyến tính. Điểm dừng có dạng tương tự:
+\[
+s^{\mathrm{stop}}_h(q,v)=-\log\sigma\big(g_\theta(\mathbf{q},h)+\langle P'_\theta\mathbf{q},Q'_\theta\psi_v\rangle\big),
+\]
+trong đó $g_\theta$ học phân phối số hop của câu hỏi. Vì logit phân rã được, điểm của mọi cạnh xuất phát từ frontier tính bằng vài phép toán vector hoá: một bảng $|\mathcal{R}|\times H$ cộng một vector điểm theo node. Chi phí là mili-giây trên CPU cho mỗi câu hỏi, kể cả trên PrimeKG đầy đủ.
+
+\begin{remark}[Vì sao không dùng GRU trên path]
+Bản thảo trước dùng GRU chạy trên cả path. Khi đó điểm phụ thuộc vào toàn bộ tiền tố, nên phải liệt kê path. Trên PrimeKG đầy đủ, quan hệ \texttt{anatomy\_protein\_present} có khoảng 3 triệu cạnh và nhiều hub có bậc hàng chục nghìn, nên số path ở hop 2--3 bùng nổ. Hệ quả là bắt buộc phải có trần cứng, và trần cứng làm hỏng đảm bảo. Scorer theo trạng thái loại bỏ hoàn toàn vấn đề này (Mệnh đề~\ref{prop:dp}). Bản GRU vẫn giữ làm ablation \method-Path (mục~\ref{sec:pathvariant}). Nếu cần thêm ngữ cảnh, có thể mở rộng trạng thái thành $(v,h,r_{\text{trước}})$, tức thêm quan hệ ngay trước đó; mọi kết quả lý thuyết vẫn giữ nguyên trên đồ thị tích tương ứng.
+\end{remark}
+
+\subsection{Ràng buộc khả thi theo kiểu đáp án (chỉ cho PrimeKG)}\label{sec:feas}
+Với mỗi kiểu node $c$, tính trước bằng BFS đa nguồn trên đồ thị vô hướng:
+\[
+d_c(v)=\min_{u:\,\mathrm{type}(u)=c}\mathrm{dist}_\G(v,u).
+\]
+Mỗi kiểu tốn một lần BFS, chi phí $O(|V|+|E|)$. Gọi $C_q$ là kiểu đáp án. BioHopR cho sẵn trường \texttt{target\_type}; với PrimeKGQA, kiểu đọc được từ SPARQL. Khi dataset không cho sẵn, dùng một bộ phân loại nhẹ và giữ lại mọi kiểu có xác suất $\ge\epsilon$. Trạng thái $(v,h)$ được giữ khi và chỉ khi $\min_{c\in C_q}d_c(v)\le H-h$, và chỉ những node có kiểu thuộc $C_q$ mới được dừng.
+
+\begin{lemma}[Không mất walk khả thi]\label{lem:feas}
+Nếu kiểu thật của đáp án thuộc $C_q$, ràng buộc trên không loại tiền tố nào của một walk độ dài $\le H$ kết thúc ở một node có kiểu thuộc $C_q$.
+\end{lemma}
+\begin{proof}
+Xét walk chạm $u$ ở độ dài $L\le H$, và tiền tố của nó tới $v_h$ với $h\le L$. Đoạn còn lại có $L-h\le H-h$ cạnh, nên $d_{\mathrm{type}(u)}(v_h)\le H-h$.
+\end{proof}
+\noindent Nếu dự đoán kiểu sai, câu hỏi đó chỉ nhận $\sigma^*(q)=+\infty$ (định nghĩa bên dưới) và được tính vào tập hiệu chỉnh. Vì vậy đảm bảo vẫn đúng. Với Freebase (WebQSP, CWQ), ràng buộc này tắt; chỉ loại các node CVT khỏi tập đáp án.
+
+\subsection{Search theo ngưỡng và điểm max-prefix}
+Với một walk $p$ độ dài $h$ có các bước $(r_i,v_i)$, định nghĩa \emph{điểm max-prefix} và \emph{điểm hoàn chỉnh} (khi dừng tại $v_h$):
+\begin{equation}
+\sbar(p)=\max_{1\le i\le h}s_i(q,r_i,v_i),\qquad
+S(p)=\max\big\{\sbar(p),\ \lambda\, s^{\mathrm{stop}}_h(q,v_h)\big\},
+\end{equation}
+với $\lambda>0$ là siêu tham số chọn trên tập validation (không chọn trên tập hiệu chỉnh). \textbf{Search theo ngưỡng $\tau$} mở rộng một bước khi và chỉ khi điểm của bước đó $\le\tau$ và trạng thái mới khả thi. Search trả về
+\[
+R_\tau(q)=\{v:\ \exists\text{ walk khả thi } p \text{ kết thúc tại } v,\ |p|\le H,\ S(p)\le\tau\}.
+\]
+
+\begin{lemma}[Đặc trưng chính xác]\label{lem:exact}
+Định nghĩa $\sigma_a(q)=\min\{S(p): p \text{ khả thi, kết thúc tại } a,\ |p|\le H\}$ cho mỗi $a\in V$ (bằng $+\infty$ nếu không có walk nào), và
+\[
+\sigma^*(q)=\min_{a\in\Aq}\sigma_a(q).
+\]
+Khi đó với mọi $\tau<\infty$: $\ a\in R_\tau(q)\iff\sigma_a(q)\le\tau$. Do đó $R_\tau(q)\cap\Aq\neq\emptyset\iff\sigma^*(q)\le\tau$, và $R_\tau(q)$ tăng dần theo $\tau$ (theo quan hệ bao hàm).
+\end{lemma}
+\begin{proof}
+($\Leftarrow$) Gọi $p^\star$ là walk đạt $\sigma_a(q)$. Mọi bước của $p^\star$ có điểm $\le\sbar(p^\star)\le\tau$, và mọi tiền tố đều khả thi theo Bổ đề~\ref{lem:feas}. Quy nạp theo độ dài cho thấy search đi được hết $p^\star$, và điểm dừng tại $a$ không vượt $\tau$. ($\Rightarrow$) Nếu search trả về $a$ thì tồn tại một walk khả thi tới $a$ có mọi bước $\le\tau$ và điểm dừng $\le\tau$, tức $S(p)\le\tau$, nên $\sigma_a(q)\le\tau$.
+\end{proof}
+
+\begin{remark}[Max-prefix là lựa chọn duy nhất đúng cho cắt nhánh không quay lui]
+Một bước đã bị cắt thì mọi hậu duệ của nó mất vĩnh viễn. Vì vậy một walk sống sót ở ngưỡng $\tau$ \emph{khi và chỉ khi} mọi bước của nó $\le\tau$, tức $\sbar(p)\le\tau$. Nói cách khác, hàm $\tau\mapsto\mathbb{1}[\text{walk sống sót}]$ hoàn toàn được xác định bởi $\sbar$. Cũng có thể thấy $\sbar$ là hàm đơn điệu theo tiền tố nhỏ nhất nằm trên $s$. Kỹ thuật làm điểm đơn điệu để tập lồng nhau đã xuất hiện trong ITCR \cite{itcr} cho đồ thị claim của LLM; ở đây nó trở thành đặc trưng chính xác của search có cắt nhánh trên KG. Hệ quả quan trọng: $\sigma^*(q)$ là \emph{ngưỡng nhỏ nhất để search thành công}. Điểm hiệu chỉnh vì thế không chứa phần dư nào, và đó là lý do Định lý~\ref{thm:coverage} có cận trên chặt.
+\end{remark}
+
+\begin{proposition}[Tính chính xác bằng bottleneck DP]\label{prop:dp}
+Với scorer theo trạng thái như mục~\ref{sec:scorer}, định nghĩa $b_0(v)=-\infty$ nếu $v\in\Sq$ và $+\infty$ nếu ngược lại, và với $h=1,\dots,H$:
+\begin{equation}\label{eq:dp}
+b_h(v)=\min_{(u,r):\ u\xrightarrow{r}v,\ (v,h)\text{ khả thi}}\ \max\big\{b_{h-1}(u),\ s_h(q,r,v)\big\}.
+\end{equation}
+Khi đó $\sigma_a(q)=\min_{h\le H}\max\{b_h(a),\lambda s^{\mathrm{stop}}_h(q,a)\}$ với mọi $a$ có kiểu thuộc $C_q$. Một lần chạy DP cho toàn bộ vector $\{\sigma_a(q)\}_a$ với chi phí $O(H(|V|+|E|))$. Search lúc test ở ngưỡng $\tau$ chính là~\eqref{eq:dp} nhưng chỉ đi qua các cạnh có $\max\{b_{h-1}(u),s_h\}\le\tau$. Chi phí lúc test bằng số trạng thái $(v,h)$ có $b_h(v)\le\tau$ cộng với bậc của chúng, và \emph{không có trần cứng nào}.
+\end{proposition}
+\begin{proof}
+Vì điểm của bước $h$ chỉ phụ thuộc vào $(h,r,v)$, ta có $\sbar$ của một walk tới $(v,h)$ bằng $\max\{\sbar(\text{tiền tố tới }(u,h-1)),\,s_h(q,r,v)\}$. Phép $\max$ đơn điệu và phép $\min$ phân phối qua nó (bài toán đường đi bottleneck). Quy nạp theo $h$ cho $b_h(v)=\min\{\sbar(p):p\text{ tới }(v,h)\}$. Mỗi hop duyệt mỗi cạnh tối đa hai lần (hai chiều).
+\end{proof}
+
+\noindent\textbf{Hệ quả thực tế.} Việc hiệu chỉnh \emph{không cần path vàng}. $\sigma^*(q_i)$ là min trên \emph{mọi} walk tới đáp án, tính bằng DP với $\tau=+\infty$. Path vàng chỉ dùng để tạo nhãn khi huấn luyện scorer. Rủi ro ``path vàng chỉ là nhãn giả'' vì thế không ảnh hưởng tới tính đúng của đảm bảo.
+
+\subsection{Hiệu chỉnh và đảm bảo}\label{sec:calib}
+Dùng tập hiệu chỉnh $\{(q_i,S_{q_i},A_{q_i})\}_{i=1}^n$ tách riêng, hoán đổi được với câu hỏi test, và độc lập với mọi lựa chọn về $\theta,\lambda,H$. Đặt $k=\lceil(n+1)(1-\alpha)\rceil$ và
+\[
+\tauhat=\sigma^*_{(k)}\quad(\text{giá trị nhỏ thứ }k;\ \tauhat=+\infty\text{ nếu }k>n\text{ hoặc phần tử thứ }k\text{ bằng }+\infty).
+\]
+Khi $\tauhat=+\infty$, \method{} \emph{báo trước rằng mức $\alpha$ này không đạt được} (tức nằm dưới trần $\rho_H$) thay vì trả về một tập không có ý nghĩa.
+
+\begin{theorem}[Coverage đúng và chặt]\label{thm:coverage}
+Giả sử $(q_1,\dots,q_n,q_{\mathrm{test}})$ hoán đổi được. Khi đó
+\[
+\Prob\big(R_{\tauhat}(q_{\mathrm{test}})\cap A_{q_{\mathrm{test}}}\neq\emptyset\ \text{ hoặc }\ \tauhat=+\infty\big)\ \ge\ 1-\alpha .
+\]
+Do đó $\Prob(\text{tìm thấy})\ge 1-\alpha-\Prob(\tauhat=+\infty)$. Ở đây $\Prob(\tauhat=+\infty)=\Prob\big(\mathrm{Bin}(n,\rho_H)<k\big)$, xấp xỉ $0$ khi $1-\alpha<\rho_H$ với một khoảng cách vừa phải. Hơn nữa, nếu các giá trị $\sigma^*$ hữu hạn đôi một khác nhau với xác suất 1 và $\tauhat<\infty$, thì
+\[
+\Prob\big(R_{\tauhat}(q_{\mathrm{test}})\cap A_{q_{\mathrm{test}}}\neq\emptyset\big)\ \le\ 1-\alpha+\tfrac{1}{n+1}.
+\]
+\end{theorem}
+\begin{proof}
+Theo bổ đề lượng tử của split conformal \cite{vovk2005,lei2018}, $\Prob(\sigma^*(q_{\mathrm{test}})\le\tauhat)\ge1-\alpha$. Trên sự kiện $\tauhat<\infty$, Bổ đề~\ref{lem:exact} cho $\sigma^*\le\tauhat\iff$ tìm thấy. Trên sự kiện $\tauhat=+\infty$, vế trái đúng theo định nghĩa. Cận trên là cận chuẩn của split conformal khi không có giá trị trùng; điều này áp dụng được vì Bổ đề~\ref{lem:exact} cho \emph{tương đương}, không chỉ kéo theo một chiều.
+\end{proof}
+
+\begin{proposition}[Trần coverage của lọc sau truy xuất]\label{prop:ceiling}
+Xét bất kỳ phương pháp nào sinh tập ứng viên $C(q)$ không phụ thuộc ngưỡng, rồi lọc $C(q)$ bằng một ngưỡng conformal. Ví dụ: CPR với TreeG, conformal top-$K$, hay lọc conformal trên đầu ra của SubgraphRAG. Khi đó với mọi ngưỡng, $\Prob(\text{tìm thấy})\le r_C:=\Prob(C(q)\cap\Aq\neq\emptyset)$. Như vậy mọi mức $\alpha<1-r_C$ đều không đạt được. Với \method{}, trần tương ứng là $\rho_H\ge r_C$ cho mọi $C(q)$ chỉ gồm node trong vòng $H$ hop.
+\end{proposition}
+\begin{proof}
+Tập sau khi lọc là tập con của $C(q)$.
+\end{proof}
+
+\noindent Mệnh đề~\ref{prop:ceiling} là lý do phải đo $r_C$ của TreeG ngay từ đầu (cổng G2 trong mục~\ref{sec:plan}). Nếu $r_C$ của TreeG thấp hơn hẳn $\rho_H$, lợi thế ``đạt được $\alpha$ nhỏ'' của \method{} là định lượng được và không thể bác bỏ.
+
+\begin{theorem}[Kiểm soát tỉ lệ bỏ sót cho câu hỏi nhiều đáp án]\label{thm:crc}
+Đặt $L_q(\tau)=1-|\{a\in\Aq:\sigma_a(q)\le\tau\}|/|\Aq|$. Hàm này không tăng theo $\tau$, có giá trị trong $[0,1]$, và tính chính xác được từ một lần chạy DP. Chọn
+\[
+\tauhat=\inf\Big\{\tau:\ \tfrac{n}{n+1}\hat R_n(\tau)+\tfrac{1}{n+1}\le\alpha\Big\},\qquad\hat R_n(\tau)=\tfrac1n\textstyle\sum_iL_{q_i}(\tau),
+\]
+và đặt $\tauhat=+\infty$ nếu tập trên rỗng. Theo conformal risk control \cite{crc}, khi tập trên khác rỗng thì $\E[L_{q_{\mathrm{test}}}(\tauhat)]\le\alpha$. Điều kiện khác rỗng xảy ra khi $\hat R_n(+\infty)$, tức tỉ lệ đáp án nằm ngoài tầm $H$ hop, đủ nhỏ.
+\end{theorem}
+
+\paragraph{Coverage theo nhóm và dịch chuyển phân phối.}
+\begin{itemize}[nosep]
+  \item \emph{Mondrian:} hiệu chỉnh riêng theo nhóm (số hop của câu hỏi, mẫu quan hệ, kiểu đáp án) để có đảm bảo cho từng nhóm. Đây là thí nghiệm phụ RQ5.
+  \item \emph{Weighted conformal} \cite{weightedcp}: hiệu chỉnh trên câu hỏi 2--3 node của PrimeKGQA, test trên câu 4 node. Trọng số lấy từ một bộ phân loại miền huấn luyện trên tập train.
+\end{itemize}
+
+\subsection{Huấn luyện scorer}\label{sec:train}
+\paragraph{Nhãn.} Với câu hỏi train, \emph{path vàng} là:
+\begin{itemize}[nosep]
+  \item PrimeKGQA: mọi walk khớp mẫu quan hệ trong SPARQL;
+  \item BioHopR: mọi walk khớp \texttt{relation\_hop1}, \texttt{relation\_hop2};
+  \item WebQSP/CWQ: mọi đường đi ngắn nhất từ thực thể chủ đề tới đáp án trên subgraph của RoG, theo cách của SubgraphRAG \cite{subgraphrag}.
+\end{itemize}
+Giới hạn tối đa 64 path cho mỗi câu hỏi. Bước dương là bước $(h,r,v)$ nằm trên một path vàng. Bước âm là các bước khác xuất phát từ cùng các trạng thái trên path vàng (âm khó), cộng thêm âm ngẫu nhiên.
+
+\paragraph{Giai đoạn 1: BCE.} Dùng BCE có trọng số cho lớp dương, cho cả bước mở rộng lẫn điểm dừng. Điểm dừng dương là $(a,h)$ với $a\in\Aq$ và $h$ là độ dài path vàng.
+
+\paragraph{Giai đoạn 2: conformal training} (theo ConfTr \cite{conftr}). Mỗi batch được chia đôi thành $B_1$ và $B_2$.
+\begin{enumerate}[nosep]
+  \item Trên $B_1$: tính $\tilde\sigma(q)$ bằng smooth-min trên path vàng của smooth-max theo bước, $\tilde\sigma(q)=-T\log\sum_{\pi}\exp(-\widetilde{S}(\pi)/T)$ với $\widetilde{S}(\pi)=T\log\sum_i\exp(s_i/T)$. Sau đó $\tau_B=\mathrm{quantile}_{1-\alpha}\{\tilde\sigma(q)\}_{q\in B_1}$; \texttt{torch.quantile} khả vi theo giá trị.
+  \item Trên $B_2$: chi phí mềm $\mathcal{C}(q)=\frac{1}{Z_q}\sum_{e\in\mathcal{E}_H(q)}\mathrm{sigmoid}\big((\tau_B-s(e))/T_c\big)$. Ở đây $\mathcal{E}_H(q)$ là tập cạnh lấy mẫu (tối đa $M$ cạnh mỗi hop) từ các trạng thái sống sót ở ngưỡng $\tau_B$; tập này được tính với stop-gradient.
+  \item Hàm mất mát: $\mathcal{L}=\mathrm{mean}_{q\in B_2}\,\mathcal{C}(q)+\mu\,\mathcal{L}_{\mathrm{BCE}}$.
+\end{enumerate}
+Giai đoạn 2 chỉ ảnh hưởng tới \emph{chi phí}. Đảm bảo coverage vẫn đúng với bất kỳ $\theta$ nào.
+
+\subsection{Thuật toán}
+\begin{algorithm}[h]
+\caption{\method: search theo ngưỡng bằng bottleneck DP (lúc test)}
+\begin{algorithmic}[1]
+\Require $q$, $\Sq$, $\tauhat$, $H$, scorer $(s_h,s^{\mathrm{stop}}_h)$, $\lambda$, kiểu đáp án $C_q$, bảng $d_c(\cdot)$
+\Ensure tập đáp án $R(q)$ đã xếp hạng, kèm walk bằng chứng
+\If{$\tauhat=+\infty$} \Return \textsc{Không đạt được} \EndIf
+\State $b_0[v]\gets-\infty$ với $v\in\Sq$, $+\infty$ với node khác; \quad $R\gets\emptyset$
+\For{$h=1$ \textbf{to} $H$}
+  \State $F\gets\{u: b_{h-1}[u]\le\tauhat\}$ \Comment{frontier}
+  \State Lấy mọi cạnh $(u,r,v)$ với $u\in F$ từ CSR; giữ những cạnh có $\min_{c\in C_q}d_c(v)\le H-h$
+  \State $\mathit{val}\gets\max\{b_{h-1}[u],\,s_h(q,r,v)\}$ \Comment{vector hoá}
+  \State $b_h[v]\gets\min$ của $\mathit{val}$ trên các cạnh tới $v$ có $\mathit{val}\le\tauhat$ (scatter-min); lưu con trỏ ngược
+  \ForAll{$v$ với $b_h[v]\le\tauhat$, $\mathrm{type}(v)\in C_q$}
+    \If{$\lambda s^{\mathrm{stop}}_h(q,v)\le\tauhat$} $R\gets R\cup\{v\}$ với điểm $\max\{b_h[v],\lambda s^{\mathrm{stop}}_h\}$ \EndIf
+  \EndFor
+\EndFor
+\State \Return $R$ xếp theo điểm tăng dần; walk bằng chứng lấy từ con trỏ ngược
+\end{algorithmic}
+\end{algorithm}
+
+\noindent Lúc hiệu chỉnh, chạy cùng thuật toán với $\tau=+\infty$ để lấy $\{\sigma_a(q_i)\}_a$. Với PrimeKG đầy đủ và $H\le3$, một lần chạy duyệt tối đa khoảng $3\times8$ triệu cạnh có hướng bằng các phép numpy/torch vector hoá. Ngoài ra có thể dùng Dijkstra-bottleneck, dừng ngay khi gặp đáp án đầu tiên, để tính riêng $\sigma^*$.
+
+\subsection{Biến thể \method-Path (chỉ dùng trong ablation)}\label{sec:pathvariant}
+Scorer là GRU trên toàn bộ tiền tố, với trạng thái ẩn khởi tạo từ $\mathbf{q}$. Search phải liệt kê path và cần trần $B_{\max}$.
+\begin{corollary}
+Gọi $E_{\mathrm{cap}}$ là sự kiện search chạm trần. Khi đó $\Prob(\text{tìm thấy})\ge1-\alpha-\Prob(\tauhat=+\infty)-\Prob(E_{\mathrm{cap}})$.
+\end{corollary}
+\noindent Ablation này cho thấy cái giá của scorer theo path: chi phí cao hơn và đảm bảo yếu hơn, đổi lấy khả năng biểu diễn tốt hơn.
+
+\subsection{Tầng LLM (tuỳ chọn, chỉ làm nếu còn thời gian)}
+Tuần tự hoá $R_{\tauhat}(q)$ và walk bằng chứng thành văn bản, đưa cho Qwen2.5-7B-Instruct, theo protocol suy luận của SubgraphRAG. Báo cáo Hit và F1 của câu trả lời so với SubgraphRAG top-$K$. Giả thuyết cần kiểm chứng: ở cùng mức recall, context của \method{} ngắn hơn.
+
+%======================================================================
+\section{Thiết lập thực nghiệm}\label{sec:exp}
+%======================================================================
+
+\subsection{Câu hỏi nghiên cứu}
+\begin{description}[nosep,leftmargin=1.2cm,style=nextline]
+  \item[RQ1] \emph{Tính đúng:} ECR có bám sát $1-\alpha$ không, kể cả với $\alpha$ nhỏ, khi lặp qua 1000 lần chia ngẫu nhiên tập hiệu chỉnh/test? UaG (kiểu theo từng hop) có vi phạm như CPR đã chỉ ra không?
+  \item[RQ2] \emph{Hiệu quả:} ở cùng $\alpha$, \method{} có tập nhỏ hơn và rẻ hơn CPR, conformal top-$K$, và SubgraphRAG kèm conformal không?
+  \item[RQ3] \emph{Mức coverage đạt được:} $r_C$ của từng phương pháp so với $\rho_H$; $\alpha$ nhỏ nhất mà mỗi phương pháp còn đạt được.
+  \item[RQ4] \emph{Thích ứng:} chi phí và kích thước tập có thay đổi theo độ khó của câu hỏi (số hop, bậc của thực thể chủ đề) không?
+  \item[RQ5] \emph{Nhiều đáp án và nhóm:} CRC trên BioHopR; Mondrian theo số hop; dịch chuyển phân phối trên PrimeKGQA.
+  \item[RQ6] \emph{Ablation:} đóng góp của từng thành phần.
+\end{description}
+
+\subsection{Dataset và tiền xử lý}
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{2.5cm} >{\raggedright\arraybackslash}p{0.5cm} >{\raggedright\arraybackslash}X}
+\toprule
+Dataset & Nguồn & $H$ & Ghi chú \\
+\midrule
+WebQSP & RoG (HF \texttt{rmanluo/RoG-webqsp}); subgraph theo câu hỏi & 2 & Train 2{,}826, test 1{,}628. Thực thể chủ đề và đáp án có sẵn. So trực tiếp với CPR/UaG \\
+CWQ & RoG (HF \texttt{rmanluo/RoG-cwq}) & 4 & Train 27{,}639, test 3{,}531 \\
+PrimeKGQA & Zenodo 13829395 (CC-BY-4.0) & 3 & 83{,}999 câu, có SPARQL (dựng được path vàng thật), có sẵn chia train/val/test \\
+BioHopR & HF \texttt{knowlab-research/BioHopR} (MIT) & 2 & 7{,}633 câu 2 hop cộng 2{,}494 câu 1 hop; 1--890 đáp án, trung bình 36.65. \textbf{Chỉ có tên thực thể}, phải ánh xạ tên sang node \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{KG y sinh: phải dựng lại PrimeKG đầy đủ.} Graph đã xử lý trong \texttt{data/processed/primekg\_graph/} \textbf{không dùng được} cho phần này, vì ba lý do:
+\begin{itemize}[nosep]
+  \item chỉ giữ 6/10 kiểu node (mất biological\_process, molecular\_function, cellular\_component, exposure);
+  \item chỉ giữ 18/30 quan hệ;
+  \item cắt \texttt{drug\_drug} còn 500k cạnh (từ 2{,}672{,}628) và \texttt{anatomy\_protein\_present} còn 500k cạnh (từ 3{,}036{,}406).
+\end{itemize}
+Các đáp án của BioHopR và PrimeKGQA được tính trên PrimeKG đầy đủ, nên cắt cạnh sẽ làm mất đáp án và làm sai $\rho_H$. Cần dựng lại từ \texttt{data/raw/primekg/kg\_giant.csv} (8{,}196{,}862 dòng, đủ 10 kiểu node và 30 quan hệ): khử trùng lặp cạnh hai chiều, lưu CSR với mã quan hệ và cờ chiều, không cắt cạnh nào.
+
+\paragraph{Ánh xạ thực thể.}
+\begin{itemize}[nosep]
+  \item \emph{BioHopR:} khớp chính xác theo cặp $(\text{tên đã chuẩn hoá chữ thường},\ \text{kiểu})$ với \texttt{x\_name}/\texttt{y\_name} của PrimeKG. Báo cáo tỉ lệ khớp; bỏ câu hỏi có thực thể chủ đề không khớp; bỏ các đáp án không khớp và báo cáo số lượng.
+  \item \emph{PrimeKGQA:} tách SPARQL để lấy IRI của thực thể và mẫu quan hệ, rồi ánh xạ sang node. Chạy lại mẫu quan hệ trên graph của mình để kiểm tra đáp án; giữ câu hỏi có ít nhất một đáp án khớp.
+\end{itemize}
+
+\subsection{Chia dữ liệu và protocol hiệu chỉnh}
+\begin{itemize}[nosep]
+  \item \textbf{P1, tương thích CPR (WebQSP, CWQ):} tập hiệu chỉnh là 10\% tập train, test trên tập test chính thức. Nếu code của CPR có seed chia dữ liệu thì dùng đúng seed đó; nếu không, dùng seed 0 và chạy lại CPR trên chính phép chia này. Mọi siêu tham số được chọn trên một tập validation tách từ phần train còn lại.
+  \item \textbf{P2, kiểm định tính đúng (mọi dataset):} gộp tập hiệu chỉnh và test, rồi chia ngẫu nhiên 1000 lần, giữ nguyên kích thước hai tập. Mỗi lần chia tính $\tauhat$ và ECR. Vì $\sigma^*$ được tính trước cho mỗi câu hỏi, 1000 lần chia chỉ tốn vài giây. Báo cáo trung bình, độ lệch chuẩn và histogram ECR, kèm phân phối lý thuyết Beta$(k,n+1-k)$.
+  \item \textbf{BioHopR:} dataset chỉ có một split, nên tự chia ngẫu nhiên train/val/cal/test theo tỉ lệ 50/10/15/25 với seed 0.
+  \item \textbf{PrimeKGQA:} dùng split chính thức; tập hiệu chỉnh gồm 2{,}000 câu lấy ngẫu nhiên từ val, phần còn lại của val dùng chọn siêu tham số.
+  \item \textbf{Lưới $\alpha$:} $\{0.05,0.1,0.2,0.3,0.5\}$, cộng thêm $\{0.6,0.7,0.8\}$ trên WebQSP/CWQ để khớp với bảng của CPR. Những mức có $\tauhat=+\infty$ được đánh dấu ``không đạt được''.
+\end{itemize}
+
+\subsection{Baseline}
+Có ba nhóm, để tách riêng ảnh hưởng của \emph{thủ tục conformal} khỏi ảnh hưởng của \emph{chất lượng scorer}.
+
+\paragraph{N1: hệ thống gốc.}
+\begin{itemize}[nosep]
+  \item \textbf{CPR}: chạy code chính thức với Qwen3-8B phục vụ qua vLLM, trên WebQSP/CWQ (P1). Nếu chuyển được TreeG sang PrimeKG thì chạy thêm trên PrimeKGQA và BioHopR. Đo thêm $r_C$ của TreeG.
+  \item \textbf{UaG}: vì code trả về 404, lấy số liệu do CPR báo cáo và ghi rõ nguồn. Đồng thời tái hiện thủ tục của UaG trên scorer của \method{} (xem N2).
+  \item \textbf{SubgraphRAG + conformal}: chạy retriever chính thức (MIT), lấy điểm bất tương thích là thứ hạng của triple đầu tiên chứa đáp án, rồi áp split conformal để chọn $K$.
+\end{itemize}
+
+\paragraph{N2: cùng scorer với \method{}, chỉ khác thủ tục conformal.} Đây là nhóm then chốt cho luận điểm chính.
+\begin{itemize}[nosep]
+  \item \textbf{Per-hop naive (kiểu UaG):} mỗi hop $h$ có ngưỡng $\tau_h$ hiệu chỉnh tuần tự trên các tiền tố vàng còn sống, với $\alpha_h$ chọn bằng grid LTT. Kỳ vọng: vi phạm coverage.
+  \item \textbf{Per-hop Bonferroni:} $\alpha_h=\alpha/(H+1)$. Kỳ vọng: đúng nhưng bảo thủ, tập lớn hơn.
+  \item \textbf{Beam cố định + lọc sau (kiểu CPR):} giữ top-$A$ trạng thái mỗi hop theo $b_h$, với $A\in\{32,128,1024\}$, rồi lọc bằng $S(p)$ như CPR. Kỳ vọng: bị chặn bởi $r_C(A)$.
+  \item \textbf{Conformal top-$K$:} xếp hạng mọi node trong vòng $H$ hop theo $\sigma_a(q)$; điểm bất tương thích là thứ hạng của đáp án tốt nhất. Kỳ vọng: đúng, nhưng tập có cùng kích thước cho mọi câu hỏi, nên APSS lớn hơn ở câu dễ.
+\end{itemize}
+
+\paragraph{N3: không có đảm bảo (tham chiếu).} Top-$K$ cố định với $K\in\{10,100\}$ và beam search thường; báo cáo ECR và chi phí.
+
+\subsection{Metric}
+\begin{itemize}[nosep]
+  \item \textbf{Tính đúng:} ECR so với $1-\alpha$; độ lệch qua 1000 lần chia; với CRC là tỉ lệ bỏ sót thực tế.
+  \item \textbf{Kích thước:} APSS (số đáp án trong $R(q)$, giống định nghĩa của CPR), trung vị, và phân vị 90.
+  \item \textbf{Chi phí:} số trạng thái mở rộng, số cạnh được chấm điểm, thời gian chạy trên CPU một luồng, số lần gọi LLM (CPR: 1 lần mỗi câu cộng vLLM; \method: 0).
+  \item \textbf{Hiệu suất coverage:} ECR/APSS (theo CPR), kèm đường cong APSS theo $\alpha$.
+  \item \textbf{Phụ:} Hit@1 của phần tử đứng đầu $R(q)$; F1 của LLM nếu làm tầng LLM.
+\end{itemize}
+\textbf{Thống kê:} 5 seed huấn luyện scorer, báo cáo trung bình $\pm$ độ lệch chuẩn. So APSS giữa các phương pháp bằng paired bootstrap trên câu hỏi (10{,}000 lần lấy mẫu); coi khác biệt là có ý nghĩa khi $p<0.05$.
+
+\subsection{Bảng và hình cần có trong bài}
+\begin{enumerate}[nosep]
+  \item \textbf{Bảng 1 (chính):} WebQSP, CWQ. Hàng: UaG (theo báo cáo), CPR, SubgraphRAG+CP, conformal top-$K$, \method. Cột: ECR/APSS ở $\alpha\in\{0.1,0.2,0.3,0.5\}$. Dùng ``---'' khi phương pháp không đạt được mức đó.
+  \item \textbf{Bảng 2:} trần coverage: $\rho_H$, $r_C$ của TreeG, $r_C$ của SubgraphRAG top-100, và $\alpha$ nhỏ nhất mỗi phương pháp đạt được.
+  \item \textbf{Bảng 3 (y sinh):} PrimeKGQA (coverage) và BioHopR (CRC) ở $\alpha\in\{0.05,0.1,0.2\}$: ECR hoặc tỉ lệ bỏ sót, APSS, chi phí.
+  \item \textbf{Bảng 4:} chi phí: thời gian, số trạng thái, số lần gọi LLM, bộ nhớ.
+  \item \textbf{Bảng 5:} ablation.
+  \item \textbf{Hình 1:} histogram ECR qua 1000 lần chia (\method, per-hop naive, Bonferroni).
+  \item \textbf{Hình 2:} APSS theo $\alpha$ cho mọi phương pháp, trên mọi dataset.
+  \item \textbf{Hình 3:} chi phí theo số hop và theo bậc của thực thể chủ đề (RQ4).
+\end{enumerate}
+
+\subsection{Ablation (RQ6)}
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{4.6cm} >{\raggedright\arraybackslash}X}
+\toprule
+Ablation & Mục đích \\
+\midrule
+A1. Max-prefix so với per-hop naive, Bonferroni, và beam + lọc sau (cùng scorer) & Chứng minh luận điểm chính về tính đúng và hiệu quả \\
+A2. Có / không có ràng buộc khả thi (chỉ PrimeKG) & Đo lợi ích về chi phí của Bổ đề~\ref{lem:feas} \\
+A3. Conformal training so với chỉ BCE & Đo mức giảm APSS và chi phí ở $\alpha=0.1$ \\
+A4. Scorer: không có $\mathbf{q}$; không có tên node; không có node2vec & Thành phần nào của scorer quan trọng \\
+A5. Trạng thái $(v,h)$ so với $(v,h,r_{\text{trước}})$ & Đánh đổi giữa khả năng biểu diễn và chi phí \\
+A6. \method{} (DP) so với \method-Path (GRU, có trần) & Lý do chọn scorer theo trạng thái \\
+A7. $\lambda$; $H$; kích thước tập hiệu chỉnh $n\in\{100,300,1000,2000\}$ & Độ nhạy \\
+A8. Encoder MiniLM so với BGE-base & Phụ thuộc vào encoder \\
+A9. Mondrian theo số hop so với hiệu chỉnh chung & Coverage theo từng nhóm \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Siêu tham số và tài nguyên}
+\begin{itemize}[nosep]
+  \item Scorer: $d=384$ (MiniLM), MLP rộng 256, chiều chiếu 128. Optimizer AdamW, lr $10^{-3}$, batch 64 câu hỏi. Giai đoạn 1 chạy 10 epoch; giai đoạn 2 chạy 5 epoch với $T=T_c=0.1$, $\mu=0.5$, $M=4096$. Chọn $\lambda\in\{0.5,1,2\}$ trên validation.
+  \item Phần cứng: 1 GPU $\ge$24GB, dùng cho vLLM Qwen3-8B (baseline CPR) và encoder. Scorer train trong vài giờ. DP và hiệu chỉnh chạy trên CPU.
+  \item Tính trước: embedding tên của khoảng 129k node PrimeKG và của tên quan hệ; bảng $d_c$ cho 10 kiểu node.
+\end{itemize}
+
+%======================================================================
+\section{Kế hoạch cài đặt}\label{sec:impl}
+%======================================================================
+
+\paragraph{Cấu trúc repo.}
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{5.2cm} >{\raggedright\arraybackslash}X}
+\toprule
+Module & Nội dung \\
+\midrule
+\texttt{chase/data/build\_primekg\_full.py} & Dựng CSR đầy đủ từ \texttt{kg\_giant.csv}: \texttt{indptr}, \texttt{indices}, \texttt{rel}, \texttt{dir}, cộng metadata node và quan hệ \\
+\texttt{chase/data/load\_rog.py} & WebQSP/CWQ từ HF: subgraph theo câu hỏi, \texttt{q\_entity}, \texttt{a\_entity} \\
+\texttt{chase/data/link\_biohopr.py} & Ánh xạ tên sang node; báo cáo tỉ lệ khớp; chia dữ liệu \\
+\texttt{chase/data/load\_primekgqa.py} & Tách SPARQL; ánh xạ IRI; kiểm tra lại đáp án \\
+\texttt{chase/data/gold\_paths.py} & Path vàng cho huấn luyện (theo mẫu quan hệ hoặc đường ngắn nhất) \\
+\texttt{chase/kg/type\_distance.py} & BFS đa nguồn cho $d_c$ (port từ \texttt{target\_distance.py} cũ) \\
+\texttt{chase/model/scorer.py} & Scorer phân rã; tính điểm vector hoá theo (bảng quan hệ, vector node) \\
+\texttt{chase/model/train\_bce.py}, \texttt{train\_conftr.py} & Hai giai đoạn huấn luyện \\
+\texttt{chase/search/dp.py} & Bottleneck DP: chế độ hiệu chỉnh ($\tau=\infty$) và chế độ test; con trỏ ngược \\
+\texttt{chase/search/path\_gru.py} & Biến thể \method-Path \\
+\texttt{chase/conformal/\{split,crc,mondrian\}.py} & $\tauhat$, CRC, Mondrian; đánh giá qua 1000 lần chia \\
+\texttt{chase/baselines/\{perhop,beam\_posthoc,topk\_cp\}.py} & Các baseline nhóm N2 \\
+\texttt{third\_party/CPR}, \texttt{third\_party/SubgraphRAG} & Code gốc của baseline nhóm N1 (git submodule) \\
+\texttt{experiments/configs/*.yaml}, \texttt{scripts/*.sh} & Một config cho mỗi dataset và mỗi thí nghiệm \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{Kiểm thử bắt buộc (chạy trước mọi thí nghiệm thật).}
+\begin{enumerate}[nosep]
+  \item \textbf{DP đúng:} trên đồ thị ngẫu nhiên nhỏ (50 node, $H=3$), $R_\tau$ của DP phải trùng với kết quả liệt kê vét cạn mọi walk, với mọi $\tau$ trong một lưới.
+  \item \textbf{Lồng nhau:} $R_\tau\subseteq R_{\tau'}$ khi $\tau<\tau'$.
+  \item \textbf{Coverage trên dữ liệu tổng hợp:} scorer ngẫu nhiên, 1000 lần chia; ECR trung bình phải nằm trong $[1-\alpha,\,1-\alpha+\tfrac1{n+1}]$, sai lệch không quá 3 độ lệch chuẩn Monte Carlo.
+  \item \textbf{Khả thi:} không có walk vàng nào bị ràng buộc khả thi loại khi kiểu đáp án đúng.
+  \item \textbf{Dữ liệu:} số node và số cạnh của PrimeKG đầy đủ khớp với thống kê đã công bố; tỉ lệ ánh xạ của BioHopR $\ge95\%$ (nếu thấp hơn, thêm khớp theo từ đồng nghĩa và ghi lại).
+\end{enumerate}
+
+%======================================================================
+\section{Lộ trình và cổng quyết định}\label{sec:plan}
+%======================================================================
+Tính từ 08/10/2026, có khoảng 15 tuần tới các hạn nộp tháng 1--2/2027.
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{1.5cm} >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}p{5.2cm}}
+\toprule
+Tuần & Việc & Cổng quyết định \\
+\midrule
+1 & Môi trường; dựng PrimeKG đầy đủ; tải 4 dataset; ánh xạ thực thể; kiểm thử 1--5 & Kiểm thử 5 đạt \\
+2 & Chạy code CPR trên WebQSP; đo $r_C$ của TreeG; tính $\rho_H$ cho mọi dataset & \textbf{G1:} ECR/APSS của CPR tái hiện trong khoảng $\pm3$ điểm / $\pm20\%$ so với bài (nếu không, dùng số trong bài và ghi rõ). \textbf{G2:} nếu $r_C$ của TreeG $\ge0.95$ trên cả WebQSP và CWQ thì luận điểm ``$\alpha$ nhỏ'' yếu; chuyển trọng tâm sang chi phí và y sinh \\
+3--4 & Scorer + BCE; DP; hiệu chỉnh; P2 trên mọi dataset & \textbf{G3:} ECR qua 1000 lần chia nằm trong $1-\alpha\pm2$ độ lệch chuẩn. Đây là yêu cầu bắt buộc; nếu không đạt thì có bug \\
+5 & So với CPR ở $\alpha\in\{0.3,0.5\}$ trên WebQSP/CWQ & \textbf{G4:} APSS của \method{} $\le1.2\times$ APSS của CPR, và ở $\alpha=0.1$ APSS $\le100$. Nếu không đạt: thêm trạng thái $(v,h,r_{\text{trước}})$, conformal training, hoặc điểm dừng mạnh hơn. Nếu đến tuần 7 vẫn không đạt: định vị lại bài sang y sinh (CHIL, JBI) hoặc theo góc ``$\alpha$ đạt được'' \\
+6--7 & PrimeKGQA, BioHopR (CRC); baseline nhóm N2 & --- \\
+8--9 & Conformal training; ablation A1--A9; dịch chuyển phân phối & \textbf{G5:} conformal training giảm APSS ít nhất 15\% ở $\alpha=0.1$; nếu không, hạ xuống thành ablation và bỏ khỏi danh sách đóng góp \\
+10--11 & Tầng LLM (tuỳ chọn); hoàn thiện bảng và hình; chạy lại với 5 seed & --- \\
+12--15 & Viết bài; phụ lục chứng minh; công bố code & --- \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\noindent\textbf{Phạm vi cố ý \emph{không} làm:} không chạy theo bảng xếp hạng Hit@1 của STaRK-Prime (sai mục tiêu, và các đối thủ ở đó dùng agent LLM); không train agent bằng RL; không làm entity linking.
+
+%======================================================================
+\section{Đóng góp, novelty và venue}
+%======================================================================
+
+\subsection{Đóng góp}
+\begin{enumerate}[nosep]
+  \item \textbf{Cắt nhánh conformal bên trong search trên KG, với một điểm hoán đổi được duy nhất cho mỗi câu hỏi.} Điểm này bằng đúng ngưỡng nhỏ nhất để search thành công (Bổ đề~\ref{lem:exact}). Đảm bảo vừa đúng vừa không bảo thủ (Định lý~\ref{thm:coverage}), xử lý cả trường hợp $\tauhat=+\infty$ mà CPR bỏ qua.
+  \item \textbf{Search chính xác, không có beam, chi phí đa thức} nhờ bottleneck DP (Mệnh đề~\ref{prop:dp}). Kèm kết quả hình thức về trần coverage của mọi phương pháp lọc sau truy xuất (Mệnh đề~\ref{prop:ceiling}).
+  \item \textbf{Kiểm soát tỉ lệ bỏ sót cho câu hỏi nhiều đáp án}, tính chính xác từ cùng một lần chạy DP (Định lý~\ref{thm:crc}).
+  \item \textbf{Conformal training} cho scorer của search (điều kiện: qua cổng G5).
+  \item \textbf{Thực nghiệm} trên WebQSP và CWQ (so với UaG, CPR) và trên PrimeKG đầy đủ (PrimeKGQA, BioHopR); kiểm định tính đúng qua 1000 lần chia; phân tích mức $\alpha$ đạt được, chi phí và tính thích ứng.
+\end{enumerate}
+
+\subsection{So với các công trình gần nhất}
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{3.2cm} >{\raggedright\arraybackslash}X}
+\toprule
+Công trình & Khác biệt với \method \\
+\midrule
+UaG \cite{uag} & Ngưỡng riêng cho từng hop, chọn bằng LTT; mất tính hoán đổi được nên vi phạm coverage \cite{cpr}; không có search chính xác; chỉ thử trên Freebase \\
+CPR \cite{cpr} & Một điểm cho mỗi câu hỏi nhưng chỉ lọc sau TreeG có beam cố định; coverage bị chặn bởi $r_C$ của TreeG (Mệnh đề~\ref{prop:ceiling}); bỏ qua trường hợp $\tauhat=+\infty$; cần một lần gọi LLM mỗi câu; không có CRC; chỉ thử trên Freebase \\
+ITCR \cite{itcr} & Cũng dùng điểm đơn điệu khi mở rộng đồ thị, nhưng trên đồ thị claim do LLM sinh (MATH, GSM8K), không phải search trên KG \\
+PAC-CF \cite{pacf} & Hiệu chỉnh ngưỡng cắt frontier trong search do LLM dẫn hướng; không có KG \\
+Conformal beam search \cite{confbeam} & Sinh chuỗi tự hồi quy; beam width thay đổi nhưng hiệu chỉnh theo từng bước \\
+SubgraphRAG \cite{subgraphrag} & Top-$K$ triple cố định; không có đảm bảo (dùng làm baseline khi gắn thêm conformal) \\
+A*Net, NBFNet \cite{astarnet,nbfnet} & Ưu tiên học được, ngân sách cố định, mục tiêu là hoàn thiện KG \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Đánh giá novelty và khả năng được nhận}
+\textbf{Novelty} không nằm ở ``conformal cho KGQA'' (đã có UaG, CPR) hay ``cắt nhánh conformal trong search'' (đã có UaG, PAC-CF, \cite{confbeam}). Nó nằm ở chỗ \emph{lần đầu tiên làm được cả hai điều cùng lúc một cách đúng đắn}: cắt nhánh trong search và hiệu chỉnh bằng một điểm duy nhất, với đặc trưng chính xác ``điểm bằng ngưỡng nhỏ nhất để thành công''. Kèm theo đó là ba hệ quả có thể đo được: (a) đảm bảo chặt; (b) search chính xác nên đạt được $\alpha$ nhỏ; (c) chi phí thích ứng, không cần LLM. Câu chuyện của bài: \textbf{``UaG sai, CPR đúng nhưng bị chặn bởi beam; \method{} đúng, chặt, đạt được $\alpha=0.05$--$0.1$, rẻ hơn, và chạy được trên KG y sinh 8 triệu cạnh.''}
+
+\textbf{Điều kiện để đạt CORE A trở lên} (theo thứ tự quan trọng):
+\begin{enumerate}[nosep]
+  \item Cổng G2 cho thấy $r_C$ của TreeG thấp hơn hẳn $\rho_H$, \emph{hoặc} cổng G4 đạt rõ (APSS và chi phí thấp hơn CPR).
+  \item Hình 1 cho thấy per-hop naive vi phạm coverage và Bonferroni bảo thủ, còn \method{} chặt.
+  \item Kết quả y sinh ở $\alpha=0.05$ với kích thước tập hợp lý.
+\end{enumerate}
+Nếu cả ba đạt, bài phù hợp với KDD, WWW, SIGIR, AAAI, IJCAI (đều A*) và CIKM (A). Nếu chỉ đạt 1 và 2, CIKM, ECAI, AISTATS (A) là thực tế hơn. NeurIPS/ICML cần thêm một kết quả lý thuyết về chi phí, ví dụ cận trên của số trạng thái mở rộng theo tỉ lệ dương giả của scorer.
+
+\begin{center}
+\small
+\begin{tabular}{lll}
+\toprule
+Venue (CORE) & Hạn nộp dự kiến (\emph{phải kiểm tra CFP}) & Ghi chú \\
+\midrule
+SIGIR 2027 (A*) & khoảng cuối tháng 1/2027 & Hợp với câu chuyện truy xuất có đảm bảo \\
+IJCAI--ECAI 2027 (A*) & khoảng giữa tháng 1/2027 & Hợp với phần search và lý thuyết \\
+KDD 2027, chu kỳ 2 (A*) & khoảng đầu tháng 2/2027 & Cần thực nghiệm mạnh trên nhiều dataset \\
+CIKM 2027 (A) & khoảng tháng 5/2027 & Dự phòng chính \\
+CHIL 2027, JBI (dự phòng) & --- & Câu chuyện an toàn y sinh \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%======================================================================
+\section{Rủi ro và cách giảm thiểu}
+%======================================================================
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{4.6cm} >{\raggedright\arraybackslash}X}
+\toprule
+Rủi ro & Giảm thiểu \\
+\midrule
+Scorer theo trạng thái yếu hơn RCVNet chạy trên path, nên APSS lớn hơn CPR ở $\alpha$ lớn & Trạng thái $(v,h,r_{\text{trước}})$; điểm dừng mạnh hơn; conformal training; nhấn vào vùng $\alpha$ nhỏ và vào chi phí (cổng G4) \\
+TreeG đã có recall rất cao, nên lợi thế ``$\alpha$ nhỏ'' biến mất & Đo ngay tuần 2 (G2); khi đó chuyển trọng tâm sang tính chặt, chi phí không cần LLM, và kết quả trên KG y sinh lớn \\
+Tập đáp án ở $\alpha=0.05$ quá lớn trên PrimeKG (do hub) & Ràng buộc khả thi; đặc trưng $\log\deg$; Mondrian theo nhóm; báo cáo trung vị và phân vị 90 \\
+$\rho_H$ thấp trên một dataset & Báo cáo trung thực; chỉ dùng lưới $\alpha$ với $1-\alpha<\rho_H-0.03$ \\
+Ánh xạ BioHopR không khớp đủ & Khớp theo từ đồng nghĩa; báo cáo tỉ lệ; giữ tập con đã khớp \\
+Không tái hiện được CPR & Dùng số liệu trong bài kèm ghi chú; so trên nhóm N2 (cùng scorer) \\
+Bị công bố trước (bản tiếp theo của CPR) & Theo dõi arXiv hằng tuần; ưu tiên nộp tháng 1/2027 \\
+Thiếu GPU cho vLLM & Chỉ CPR cần LLM; có thể dùng Qwen3-8B bản AWQ, cần khoảng 12GB \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+%======================================================================
+\section{Tài sản hiện có}
+%======================================================================
+\begin{itemize}[nosep]
+  \item \texttt{data/raw/primekg/kg\_giant.csv}: PrimeKG đầy đủ (dùng để dựng lại graph).
+  \item \texttt{data/processed/primekg\_graph/}: graph đã cắt cạnh; \textbf{chỉ dùng tham khảo}, không dùng cho thực nghiệm.
+  \item Từ repo cũ (cần copy sang): \texttt{target\_distance.py} (BFS khoảng cách), hạ tầng chạy song song và evaluator, NBFNet và A*Net (tham chiếu).
+\end{itemize}
+
+%======================================================================
+\begin{thebibliography}{99}
+\small
+\bibitem{ddxplus} A.~Fansi Tchango et al. DDXPlus: A new dataset for automatic medical diagnosis. \emph{NeurIPS Datasets and Benchmarks}, 2022.
+\bibitem{primekg} P.~Chandak, K.~Huang, M.~Zitnik. Building a knowledge graph to enable precision medicine. \emph{Scientific Data}, 2023.
+\bibitem{mind} C.~Li et al. Multi-interest network with dynamic routing for recommendation at Tmall. \emph{CIKM}, 2019.
+\bibitem{stark} S.~Wu et al. STaRK: Benchmarking LLM retrieval on textual and relational knowledge bases. \emph{NeurIPS Datasets and Benchmarks}, 2024. arXiv:2404.13207.
+\bibitem{mor} Mixture of structural-and-textual retrieval over text-rich graph knowledge bases. \emph{Findings of ACL}, 2025. arXiv:2502.20317.
+\bibitem{ark} J.~Polonuer, L.~Vittor, I.~Arango, A.~Noori, D.~A.~Clifton, L.~Del~Corro, M.~Zitnik. Autonomous knowledge graph exploration with adaptive breadth-depth retrieval. arXiv:2601.13969, 2026.
+\bibitem{grasp} Y.~Tao et al. GRASP: Plan-guided graph retrieval with adaptive fusion and reranking on semi-structured knowledge bases. arXiv:2605.30237, 2026.
+\bibitem{seeder} H.~Shirzad, F.~Wenkel, D.~Beaini, D.~J.~Sutherland, E.~Noutahi. SeedER: Seed-expand-retrieve for efficient knowledge graph retrieval. arXiv:2605.23753, 2026.
+\bibitem{graphr1} Graph-R1: Towards agentic GraphRAG framework via end-to-end reinforcement learning. \emph{ICML}, 2026. arXiv:2507.21892.
+\bibitem{kgr1} Efficient and transferable agentic knowledge graph RAG via reinforcement learning (KG-R1). arXiv:2509.26383, 2025.
+\bibitem{subgraphrag} M.~Li, S.~Miao, P.~Li. Simple is effective: The roles of graphs and large language models in knowledge-graph-based retrieval-augmented generation. \emph{ICLR}, 2025. arXiv:2410.20724.
+\bibitem{nbfnet} Z.~Zhu et al. Neural Bellman-Ford networks: A general graph neural network framework for link prediction. \emph{NeurIPS}, 2021.
+\bibitem{astarnet} Z.~Zhu et al. A*Net: A scalable path-based reasoning approach for knowledge graphs. \emph{NeurIPS}, 2023.
+\bibitem{primekgqa} X.~Yan, P.~Westphal, J.~Seliger, R.~Usbeck. Bridging the gap: Generating a comprehensive biomedical knowledge graph question answering dataset (PrimeKGQA). \emph{ECAI}, 2024. doi:10.3233/FAIA240615.
+\bibitem{biohopr} Y.~Kim, Y.~Abdulle, H.~Wu. BioHopR: A benchmark for multi-hop, multi-answer reasoning in biomedical domain. \emph{Findings of ACL}, 2025. arXiv:2505.22240.
+\bibitem{adapath} J.~H.~Kim, D.~Kim, Y.~Piao, S.~J.~Hwang. AdaPath: Query-adaptive path-finding via path-bank for multi-hop implicit biomedical KGQA. \emph{EMNLP}, 2026. arXiv:2608.30556.
+\bibitem{medhopqa} MedHopQA: A disease-centred multi-hop reasoning benchmark and evaluation framework for LLM-based biomedical question answering. \emph{Database}, 2026.
+\bibitem{confcontext} D.~Chakraborty, E.~Yang, D.~Khashabi, D.~Lawrie, K.~Duh. Principled context engineering for RAG: Statistical guarantees via conformal prediction. \emph{ECIR}, 2026. arXiv:2511.17908.
+\bibitem{confkg} Y.~Zhu et al. Predicate-conditional conformalized answer sets for knowledge graph embeddings. \emph{Findings of ACL}, 2025.
+\bibitem{confbeam} N.~Deutschmann, M.~Alberts, M.~Rodríguez Martínez. Conformal autoregressive generation: Beam search with coverage guarantees. \emph{AAAI}, 2024. arXiv:2309.03797.
+\bibitem{kgonlyhelps} M.~Mandarapu, S.~Kunkunuru. Knowledge-graph grounding helps LLMs only for out-of-training knowledge: A controlled study on clinical question answering. arXiv:2606.22419, 2026.
+\bibitem{uag} B.~Ni, Y.~Wang, L.~Cheng, E.~Blasch, T.~Derr. Towards trustworthy knowledge graph reasoning: An uncertainty aware perspective (UaG). \emph{AAAI}, 2025. arXiv:2410.08985.
+\bibitem{cpr} S.~Lin, C.~Zhou, X.~Lin, Z.~Dong, K.~Lu, Z.~Peng, J.~Yin, D.~N.~Metaxas. Conformal path reasoning: Trustworthy knowledge graph question answering via path-level calibration. arXiv:2605.08077, 2026.
+\bibitem{pacf} T.~Qian, J.~Chen, Z.~Sun, L.~Wang. PAC-CF: Calibrating irreversible frontier pruning in LLM-guided search. arXiv:2604.14345, 2026.
+\bibitem{itcr} T.~Wang, Y.~Shi, Y.~Yan, H.~Zhang. Inference-time conformal reasoning with valid factuality control for large language models. arXiv:2606.08831, 2026.
+\bibitem{traq} S.~Li, S.~Park, I.~Lee, O.~Bastani. TRAQ: Trustworthy retrieval augmented question answering via conformal prediction. \emph{NAACL}, 2024.
+\bibitem{prunenpredict} H.~Vishwakarma et al. Prune 'n Predict: Optimizing LLM decision-making with conformal prediction. \emph{ICML}, 2025. arXiv:2501.00555.
+\bibitem{ltt} A.~N.~Angelopoulos, S.~Bates, E.~J.~Candès, M.~I.~Jordan, L.~Lei. Learn then test: Calibrating predictive algorithms to achieve risk control. arXiv:2110.01052, 2021.
+\bibitem{vovk2005} V.~Vovk, A.~Gammerman, G.~Shafer. \emph{Algorithmic Learning in a Random World}. Springer, 2005.
+\bibitem{lei2018} J.~Lei et al. Distribution-free predictive inference for regression. \emph{JASA}, 2018.
+\bibitem{crc} A.~N.~Angelopoulos et al. Conformal risk control. \emph{ICLR}, 2024.
+\bibitem{weightedcp} R.~J.~Tibshirani et al. Conformal prediction under covariate shift. \emph{NeurIPS}, 2019.
+\bibitem{conftr} D.~Stutz et al. Learning optimal conformal classifiers. \emph{ICLR}, 2022.
+\end{thebibliography}
+
+\end{document}
