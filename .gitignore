@@ -1,6 +1,7 @@
 # Data: keep raw and processed datasets out of Git; document download/build steps in README.
 data/
 datasets/
+models/
 
 # Experiment outputs, checkpoints, logs
 outputs/

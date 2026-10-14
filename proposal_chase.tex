@@ -44,7 +44,7 @@ for Multi-hop Evidence Retrieval on Knowledge Graphs\\[4pt]
 \maketitle
 
 \begin{abstract}
-Phần~1 tóm tắt lý do dừng hướng cũ: chẩn đoán trên DDXPlus bằng MIND kết hợp beam search trên PrimeKG không tạo ra được đóng góp khoa học, vì encoder có giám sát đã giải gần trọn bài toán còn PrimeKG gần như không chứa tín hiệu chẩn đoán cho các bệnh của DDXPlus. Phần còn lại đề xuất \method{}, một thủ tục truy xuất bằng chứng nhiều bước trên đồ thị tri thức (KG). \method{} cắt nhánh \emph{ngay trong lúc search} bằng một scorer học được, với \emph{một} ngưỡng duy nhất hiệu chỉnh bằng conformal prediction. Điểm bất tương thích của mỗi câu hỏi được định nghĩa là \emph{ngưỡng nhỏ nhất để search tìm thấy đáp án}, và đây là một giá trị bottleneck tính chính xác được bằng quy hoạch động trên đồ thị trạng thái $(\text{node},\text{hop})$. Nhờ vậy: (i) đảm bảo $\Prob(\text{tìm thấy đáp án})\ge 1-\alpha$ đúng với mẫu hữu hạn, và \emph{không bảo thủ} (cận trên $1-\alpha+\tfrac{1}{n+1}$); (ii) search chính xác với chi phí đa thức, không cần beam hay trần cứng, nên mức coverage đạt được chỉ bị chặn bởi khả năng chạm tới đáp án trong $H$ hop của chính KG; (iii) ngân sách tự điều chỉnh theo từng câu hỏi; (iv) với câu hỏi nhiều đáp án, tỉ lệ bỏ sót được kiểm soát bằng conformal risk control từ cùng một lần chạy DP. So với hai công trình gần nhất: UaG hiệu chỉnh theo từng hop nên mất tính hoán đổi được; CPR có đảm bảo đúng nhưng chỉ lọc sau một search có beam cố định. Thực nghiệm chạy trên WebQSP và CWQ (so trực tiếp với UaG và CPR) và trên hai benchmark dựng từ PrimeKG đầy đủ (PrimeKGQA, BioHopR).
+Phần~1 tóm tắt lý do dừng hướng cũ: chẩn đoán trên DDXPlus bằng MIND kết hợp beam search trên PrimeKG không tạo ra được đóng góp khoa học, vì encoder có giám sát đã giải gần trọn bài toán còn PrimeKG gần như không chứa tín hiệu chẩn đoán cho các bệnh của DDXPlus. Phần còn lại đề xuất \method{}, một thủ tục truy xuất bằng chứng nhiều bước trên đồ thị tri thức (KG). \method{} cắt nhánh \emph{ngay trong lúc search} bằng một scorer học được, với \emph{một} ngưỡng duy nhất hiệu chỉnh bằng conformal prediction. Điểm bất tương thích của mỗi câu hỏi được định nghĩa là \emph{ngưỡng nhỏ nhất để search tìm thấy đáp án}, và đây là một giá trị bottleneck tính chính xác được bằng quy hoạch động trên đồ thị trạng thái $(\text{node},\text{hop})$. Nhờ vậy: (i) đảm bảo $\Prob(\text{tìm thấy đáp án})\ge 1-\alpha$ đúng với mẫu hữu hạn, và \emph{không bảo thủ} (cận trên $1-\alpha+\tfrac{1}{n+1}$); (ii) search chính xác với chi phí đa thức, không cần beam hay trần cứng, nên mức coverage đạt được chỉ bị chặn bởi khả năng chạm tới đáp án trong $H$ hop của chính KG; (iii) ngân sách tự điều chỉnh theo từng câu hỏi; (iv) với câu hỏi nhiều đáp án, tỉ lệ bỏ sót được kiểm soát bằng conformal risk control từ cùng một lần chạy DP. So với hai công trình gần nhất: UaG hiệu chỉnh theo từng hop nên mất tính hoán đổi được; CPR có đảm bảo đúng nhưng chỉ lọc sau một search có beam cố định. Thực nghiệm chạy trên WebQSP và CWQ (so trực tiếp với UaG và CPR) và trên BioHopR, dựng từ PrimeKG đầy đủ.
 \end{abstract}
 
 \tableofcontents
@@ -141,7 +141,7 @@ Truy xuất subgraph nhẹ & SubgraphRAG \cite{subgraphrag} & Top-$K$ cố đị
 Suy luận trên KG có ưu tiên học được & NBFNet \cite{nbfnet}; A*Net \cite{astarnet} & Ngân sách node cố định \\
 Truy xuất trên STaRK-Prime (PrimeKG) & STaRK \cite{stark}; MoR \cite{mor}; ARK \cite{ark}; GRASP \cite{grasp}; SeedER \cite{seeder} & Tối ưu Hit@1; agent LLM hoặc RL; không có đảm bảo \\
 Agent LLM train bằng RL trên KG & Graph-R1 \cite{graphr1}; KG-R1 \cite{kgr1} & Tốn GPU, không có đảm bảo \\
-QA nhiều bước trên KG y sinh & PrimeKGQA \cite{primekgqa}; BioHopR \cite{biohopr}; AdaPath \cite{adapath}; MedHopQA \cite{medhopqa} & Nguồn dataset \\
+QA nhiều bước trên KG y sinh & BioHopR \cite{biohopr}; AdaPath \cite{adapath}; MedHopQA \cite{medhopqa}; PrimeKGQA \cite{primekgqa} (bị loại, xem mục~\ref{sec:exp}) & Nguồn dataset \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -225,7 +225,7 @@ Với mỗi kiểu node $c$, tính trước bằng BFS đa nguồn trên đồ t
 \[
 d_c(v)=\min_{u:\,\mathrm{type}(u)=c}\mathrm{dist}_\G(v,u).
 \]
-Mỗi kiểu tốn một lần BFS, chi phí $O(|V|+|E|)$. Gọi $C_q$ là kiểu đáp án. BioHopR cho sẵn trường \texttt{target\_type}; với PrimeKGQA, kiểu đọc được từ SPARQL. Khi dataset không cho sẵn, dùng một bộ phân loại nhẹ và giữ lại mọi kiểu có xác suất $\ge\epsilon$. Trạng thái $(v,h)$ được giữ khi và chỉ khi $\min_{c\in C_q}d_c(v)\le H-h$, và chỉ những node có kiểu thuộc $C_q$ mới được dừng.
+Mỗi kiểu tốn một lần BFS, chi phí $O(|V|+|E|)$. Gọi $C_q$ là kiểu đáp án. BioHopR cho sẵn trường \texttt{target\_type}. Khi dataset không cho sẵn, dùng một bộ phân loại nhẹ và giữ lại mọi kiểu có xác suất $\ge\epsilon$. Trạng thái $(v,h)$ được giữ khi và chỉ khi $\min_{c\in C_q}d_c(v)\le H-h$, và chỉ những node có kiểu thuộc $C_q$ mới được dừng.
 
 \begin{lemma}[Không mất walk khả thi]\label{lem:feas}
 Nếu kiểu thật của đáp án thuộc $C_q$, ràng buộc trên không loại tiền tố nào của một walk độ dài $\le H$ kết thúc ở một node có kiểu thuộc $C_q$.
@@ -315,13 +315,12 @@ và đặt $\tauhat=+\infty$ nếu tập trên rỗng. Theo conformal risk contr
 \paragraph{Coverage theo nhóm và dịch chuyển phân phối.}
 \begin{itemize}[nosep]
   \item \emph{Mondrian:} hiệu chỉnh riêng theo nhóm (số hop của câu hỏi, mẫu quan hệ, kiểu đáp án) để có đảm bảo cho từng nhóm. Đây là thí nghiệm phụ RQ5.
-  \item \emph{Weighted conformal} \cite{weightedcp}: hiệu chỉnh trên câu hỏi 2--3 node của PrimeKGQA, test trên câu 4 node. Trọng số lấy từ một bộ phân loại miền huấn luyện trên tập train.
+  \item \emph{Weighted conformal} \cite{weightedcp}: hiệu chỉnh trên câu hỏi 1 hop của BioHopR, test trên câu 2 hop. Trọng số lấy từ một bộ phân loại miền huấn luyện trên tập train.
 \end{itemize}
 
 \subsection{Huấn luyện scorer}\label{sec:train}
 \paragraph{Nhãn.} Với câu hỏi train, \emph{path vàng} là:
 \begin{itemize}[nosep]
-  \item PrimeKGQA: mọi walk khớp mẫu quan hệ trong SPARQL;
   \item BioHopR: mọi walk khớp \texttt{relation\_hop1}, \texttt{relation\_hop2};
   \item WebQSP/CWQ: mọi đường đi ngắn nhất từ thực thể chủ đề tới đáp án trên subgraph của RoG, theo cách của SubgraphRAG \cite{subgraphrag}.
 \end{itemize}
@@ -380,7 +379,7 @@ Tuần tự hoá $R_{\tauhat}(q)$ và walk bằng chứng thành văn bản, đ�
   \item[RQ2] \emph{Hiệu quả:} ở cùng $\alpha$, \method{} có tập nhỏ hơn và rẻ hơn CPR, conformal top-$K$, và SubgraphRAG kèm conformal không?
   \item[RQ3] \emph{Mức coverage đạt được:} $r_C$ của từng phương pháp so với $\rho_H$; $\alpha$ nhỏ nhất mà mỗi phương pháp còn đạt được.
   \item[RQ4] \emph{Thích ứng:} chi phí và kích thước tập có thay đổi theo độ khó của câu hỏi (số hop, bậc của thực thể chủ đề) không?
-  \item[RQ5] \emph{Nhiều đáp án và nhóm:} CRC trên BioHopR; Mondrian theo số hop; dịch chuyển phân phối trên PrimeKGQA.
+  \item[RQ5] \emph{Nhiều đáp án và nhóm:} CRC trên BioHopR; Mondrian theo số hop và mẫu quan hệ; dịch chuyển phân phối trên BioHopR (1 hop sang 2 hop).
   \item[RQ6] \emph{Ablation:} đóng góp của từng thành phần.
 \end{description}
 
@@ -393,9 +392,7 @@ Dataset & Nguồn & $H$ & Ghi chú \\
 \midrule
 WebQSP & RoG (HF \texttt{rmanluo/RoG-webqsp}); subgraph theo câu hỏi & 2 & Train 2{,}826, test 1{,}628. Thực thể chủ đề và đáp án có sẵn. So trực tiếp với CPR/UaG \\
 CWQ & RoG (HF \texttt{rmanluo/RoG-cwq}) & 4 & Train 27{,}639, test 3{,}531 \\
-PrimeKGQA & Zenodo 13829395 (CC-BY-4.0) & 3 & 83{,}999 câu, có SPARQL (dựng được path vàng thật), có sẵn chia train/val/test \\
-BioHopR & HF \texttt{knowlab-research/BioHopR} (MIT) & 2 & 7{,}633 câu 2 hop cộng 2{,}494 câu 1 hop; 1--890 đáp án, trung bình 36.65. \textbf{Chỉ có tên thực thể}, phải ánh xạ tên sang node \\
-\bottomrule
+BioHopR & HF \texttt{knowlab-research/BioHopR} (MIT) & 2 & 7{,}633 câu 2 hop cộng 2{,}494 câu 1 hop; 1--890 đáp án, trung bình 36.65. \textbf{Chỉ có tên thực thể}, phải ánh xạ tên sang node \\\bottomrule
 \end{tabularx}
 \end{center}
 
@@ -405,21 +402,19 @@ BioHopR & HF \texttt{knowlab-research/BioHopR} (MIT) & 2 & 7{,}633 câu 2 hop c�
   \item chỉ giữ 18/30 quan hệ;
   \item cắt \texttt{drug\_drug} còn 500k cạnh (từ 2{,}672{,}628) và \texttt{anatomy\_protein\_present} còn 500k cạnh (từ 3{,}036{,}406).
 \end{itemize}
-Các đáp án của BioHopR và PrimeKGQA được tính trên PrimeKG đầy đủ, nên cắt cạnh sẽ làm mất đáp án và làm sai $\rho_H$. Cần dựng lại từ \texttt{data/raw/primekg/kg\_giant.csv} (8{,}196{,}862 dòng, đủ 10 kiểu node và 30 quan hệ): khử trùng lặp cạnh hai chiều, lưu CSR với mã quan hệ và cờ chiều, không cắt cạnh nào.
+Các đáp án của BioHopR được tính trên PrimeKG đầy đủ, nên cắt cạnh sẽ làm mất đáp án và làm sai $\rho_H$. Cần dựng lại từ \texttt{data/raw/primekg/kg\_giant.csv} (8{,}196{,}862 dòng, đủ 10 kiểu node và 30 quan hệ): khử trùng lặp cạnh hai chiều, lưu CSR với mã quan hệ và cờ chiều, không cắt cạnh nào.
 
 \paragraph{Ánh xạ thực thể.}
 \begin{itemize}[nosep]
-  \item \emph{BioHopR:} khớp chính xác theo cặp $(\text{tên đã chuẩn hoá chữ thường},\ \text{kiểu})$ với \texttt{x\_name}/\texttt{y\_name} của PrimeKG. Báo cáo tỉ lệ khớp; bỏ câu hỏi có thực thể chủ đề không khớp; bỏ các đáp án không khớp và báo cáo số lượng.
-  \item \emph{PrimeKGQA:} tách SPARQL để lấy IRI của thực thể và mẫu quan hệ, rồi ánh xạ sang node. Chạy lại mẫu quan hệ trên graph của mình để kiểm tra đáp án; giữ câu hỏi có ít nhất một đáp án khớp.
-\end{itemize}
+  \item \emph{BioHopR:} khớp chính xác theo cặp $(\text{tên đã chuẩn hoá chữ thường},\ \text{kiểu})$ với \texttt{x\_name}/\texttt{y\_name} của PrimeKG. Báo cáo tỉ lệ khớp; bỏ câu hỏi có thực thể chủ đề không khớp; bỏ các đáp án không khớp và báo cáo số lượng.\end{itemize}
+
+\paragraph{Kiểm tra tương thích trước khi dùng một benchmark y sinh.} Mọi benchmark dựng trên PrimeKG phải qua cùng một phép kiểm tra: tỉ lệ dữ kiện trong câu hỏi (hoặc tỉ lệ đáp án đi tới được theo đúng mẫu quan hệ) có thực sự tồn tại trong graph của mình. BioHopR đạt 96.9\%. PrimeKGQA \cite{primekgqa}, ứng viên ban đầu, \textbf{bị loại}: chỉ 4.5\% triple trong câu hỏi tồn tại trong PrimeKG, do bảng ID $\to$ tên dùng khi sinh câu hỏi bị lệch; ngoài ra 65\% câu hỏi hỏi về quan hệ thay vì thực thể.
 
 \subsection{Chia dữ liệu và protocol hiệu chỉnh}
 \begin{itemize}[nosep]
   \item \textbf{P1, tương thích CPR (WebQSP, CWQ):} tập hiệu chỉnh là 10\% tập train, test trên tập test chính thức. Nếu code của CPR có seed chia dữ liệu thì dùng đúng seed đó; nếu không, dùng seed 0 và chạy lại CPR trên chính phép chia này. Mọi siêu tham số được chọn trên một tập validation tách từ phần train còn lại.
   \item \textbf{P2, kiểm định tính đúng (mọi dataset):} gộp tập hiệu chỉnh và test, rồi chia ngẫu nhiên 1000 lần, giữ nguyên kích thước hai tập. Mỗi lần chia tính $\tauhat$ và ECR. Vì $\sigma^*$ được tính trước cho mỗi câu hỏi, 1000 lần chia chỉ tốn vài giây. Báo cáo trung bình, độ lệch chuẩn và histogram ECR, kèm phân phối lý thuyết Beta$(k,n+1-k)$.
-  \item \textbf{BioHopR:} dataset chỉ có một split, nên tự chia ngẫu nhiên train/val/cal/test theo tỉ lệ 50/10/15/25 với seed 0.
-  \item \textbf{PrimeKGQA:} dùng split chính thức; tập hiệu chỉnh gồm 2{,}000 câu lấy ngẫu nhiên từ val, phần còn lại của val dùng chọn siêu tham số.
-  \item \textbf{Lưới $\alpha$:} $\{0.05,0.1,0.2,0.3,0.5\}$, cộng thêm $\{0.6,0.7,0.8\}$ trên WebQSP/CWQ để khớp với bảng của CPR. Những mức có $\tauhat=+\infty$ được đánh dấu ``không đạt được''.
+  \item \textbf{BioHopR:} dataset chỉ có một split, nên tự chia ngẫu nhiên train/val/cal/test theo tỉ lệ 50/10/15/25 với seed 0.  \item \textbf{Lưới $\alpha$:} $\{0.05,0.1,0.2,0.3,0.5\}$, cộng thêm $\{0.6,0.7,0.8\}$ trên WebQSP/CWQ để khớp với bảng của CPR. Những mức có $\tauhat=+\infty$ được đánh dấu ``không đạt được''.
 \end{itemize}
 
 \subsection{Baseline}
@@ -427,7 +422,7 @@ Có ba nhóm, để tách riêng ảnh hưởng của \emph{thủ tục conforma
 
 \paragraph{N1: hệ thống gốc.}
 \begin{itemize}[nosep]
-  \item \textbf{CPR}: chạy code chính thức với Qwen3-8B phục vụ qua vLLM, trên WebQSP/CWQ (P1). Nếu chuyển được TreeG sang PrimeKG thì chạy thêm trên PrimeKGQA và BioHopR. Đo thêm $r_C$ của TreeG.
+  \item \textbf{CPR}: chạy code chính thức với Qwen3-8B phục vụ qua vLLM, trên WebQSP/CWQ (P1). Nếu chuyển được TreeG sang PrimeKG thì chạy thêm trên BioHopR. Đo thêm $r_C$ của TreeG.
   \item \textbf{UaG}: vì code trả về 404, lấy số liệu do CPR báo cáo và ghi rõ nguồn. Đồng thời tái hiện thủ tục của UaG trên scorer của \method{} (xem N2).
   \item \textbf{SubgraphRAG + conformal}: chạy retriever chính thức (MIT), lấy điểm bất tương thích là thứ hạng của triple đầu tiên chứa đáp án, rồi áp split conformal để chọn $K$.
 \end{itemize}
@@ -456,7 +451,7 @@ Có ba nhóm, để tách riêng ảnh hưởng của \emph{thủ tục conforma
 \begin{enumerate}[nosep]
   \item \textbf{Bảng 1 (chính):} WebQSP, CWQ. Hàng: UaG (theo báo cáo), CPR, SubgraphRAG+CP, conformal top-$K$, \method. Cột: ECR/APSS ở $\alpha\in\{0.1,0.2,0.3,0.5\}$. Dùng ``---'' khi phương pháp không đạt được mức đó.
   \item \textbf{Bảng 2:} trần coverage: $\rho_H$, $r_C$ của TreeG, $r_C$ của SubgraphRAG top-100, và $\alpha$ nhỏ nhất mỗi phương pháp đạt được.
-  \item \textbf{Bảng 3 (y sinh):} PrimeKGQA (coverage) và BioHopR (CRC) ở $\alpha\in\{0.05,0.1,0.2\}$: ECR hoặc tỉ lệ bỏ sót, APSS, chi phí.
+  \item \textbf{Bảng 3 (y sinh):} BioHopR (coverage và CRC) ở $\alpha\in\{0.05,0.1,0.2\}$: ECR hoặc tỉ lệ bỏ sót, APSS, chi phí.
   \item \textbf{Bảng 4:} chi phí: thời gian, số trạng thái, số lần gọi LLM, bộ nhớ.
   \item \textbf{Bảng 5:} ablation.
   \item \textbf{Hình 1:} histogram ECR qua 1000 lần chia (\method, per-hop naive, Bonferroni).
@@ -504,9 +499,7 @@ Module & Nội dung \\
 \midrule
 \texttt{chase/data/build\_primekg\_full.py} & Dựng CSR đầy đủ từ \texttt{kg\_giant.csv}: \texttt{indptr}, \texttt{indices}, \texttt{rel}, \texttt{dir}, cộng metadata node và quan hệ \\
 \texttt{chase/data/load\_rog.py} & WebQSP/CWQ từ HF: subgraph theo câu hỏi, \texttt{q\_entity}, \texttt{a\_entity} \\
-\texttt{chase/data/link\_biohopr.py} & Ánh xạ tên sang node; báo cáo tỉ lệ khớp; chia dữ liệu \\
-\texttt{chase/data/load\_primekgqa.py} & Tách SPARQL; ánh xạ IRI; kiểm tra lại đáp án \\
-\texttt{chase/data/gold\_paths.py} & Path vàng cho huấn luyện (theo mẫu quan hệ hoặc đường ngắn nhất) \\
+\texttt{chase/data/link\_biohopr.py} & Ánh xạ tên sang node; báo cáo tỉ lệ khớp; chia dữ liệu \\\texttt{chase/data/gold\_paths.py} & Path vàng cho huấn luyện (theo mẫu quan hệ hoặc đường ngắn nhất) \\
 \texttt{chase/kg/type\_distance.py} & BFS đa nguồn cho $d_c$ (port từ \texttt{target\_distance.py} cũ) \\
 \texttt{chase/model/scorer.py} & Scorer phân rã; tính điểm vector hoá theo (bảng quan hệ, vector node) \\
 \texttt{chase/model/train\_bce.py}, \texttt{train\_conftr.py} & Hai giai đoạn huấn luyện \\
@@ -544,7 +537,7 @@ Tuần & Việc & Cổng quyết định \\
 2 & Chạy code CPR trên WebQSP; đo $r_C$ của TreeG; tính $\rho_H$ cho mọi dataset & \textbf{G1:} ECR/APSS của CPR tái hiện trong khoảng $\pm3$ điểm / $\pm20\%$ so với bài (nếu không, dùng số trong bài và ghi rõ). \textbf{G2:} nếu $r_C$ của TreeG $\ge0.95$ trên cả WebQSP và CWQ thì luận điểm ``$\alpha$ nhỏ'' yếu; chuyển trọng tâm sang chi phí và y sinh \\
 3--4 & Scorer + BCE; DP; hiệu chỉnh; P2 trên mọi dataset & \textbf{G3:} ECR qua 1000 lần chia nằm trong $1-\alpha\pm2$ độ lệch chuẩn. Đây là yêu cầu bắt buộc; nếu không đạt thì có bug \\
 5 & So với CPR ở $\alpha\in\{0.3,0.5\}$ trên WebQSP/CWQ & \textbf{G4:} APSS của \method{} $\le1.2\times$ APSS của CPR, và ở $\alpha=0.1$ APSS $\le100$. Nếu không đạt: thêm trạng thái $(v,h,r_{\text{trước}})$, conformal training, hoặc điểm dừng mạnh hơn. Nếu đến tuần 7 vẫn không đạt: định vị lại bài sang y sinh (CHIL, JBI) hoặc theo góc ``$\alpha$ đạt được'' \\
-6--7 & PrimeKGQA, BioHopR (CRC); baseline nhóm N2 & --- \\
+6--7 & BioHopR (coverage, CRC); baseline nhóm N2 & --- \\
 8--9 & Conformal training; ablation A1--A9; dịch chuyển phân phối & \textbf{G5:} conformal training giảm APSS ít nhất 15\% ở $\alpha=0.1$; nếu không, hạ xuống thành ablation và bỏ khỏi danh sách đóng góp \\
 10--11 & Tầng LLM (tuỳ chọn); hoàn thiện bảng và hình; chạy lại với 5 seed & --- \\
 12--15 & Viết bài; phụ lục chứng minh; công bố code & --- \\
@@ -564,7 +557,7 @@ Tuần & Việc & Cổng quyết định \\
   \item \textbf{Search chính xác, không có beam, chi phí đa thức} nhờ bottleneck DP (Mệnh đề~\ref{prop:dp}). Kèm kết quả hình thức về trần coverage của mọi phương pháp lọc sau truy xuất (Mệnh đề~\ref{prop:ceiling}).
   \item \textbf{Kiểm soát tỉ lệ bỏ sót cho câu hỏi nhiều đáp án}, tính chính xác từ cùng một lần chạy DP (Định lý~\ref{thm:crc}).
   \item \textbf{Conformal training} cho scorer của search (điều kiện: qua cổng G5).
-  \item \textbf{Thực nghiệm} trên WebQSP và CWQ (so với UaG, CPR) và trên PrimeKG đầy đủ (PrimeKGQA, BioHopR); kiểm định tính đúng qua 1000 lần chia; phân tích mức $\alpha$ đạt được, chi phí và tính thích ứng.
+  \item \textbf{Thực nghiệm} trên WebQSP và CWQ (so với UaG, CPR) và trên PrimeKG đầy đủ (BioHopR); kiểm định tính đúng qua 1000 lần chia; phân tích mức $\alpha$ đạt được, chi phí và tính thích ứng.
 \end{enumerate}
 
 \subsection{So với các công trình gần nhất}

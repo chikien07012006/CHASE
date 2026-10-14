@@ -1,147 +1,136 @@
-# Dữ liệu cho dự án CHASE
+# Data statistics
 
-Tất cả lệnh chạy từ thư mục gốc của repo. `data/` nằm trong `.gitignore`, nên file này là nơi ghi lại cách lấy dữ liệu.
+All numbers were computed from the processed data in `data/processed/` (git-ignored) on 13 Oct 2026. To rebuild, see the README.
 
-## Trạng thái (kiểm tra 12/10/2026)
+## Overview
 
-| Mục | Trạng thái | Dùng cho việc gì trong dự án |
+| Dataset | KG searched | Train | Val | Test | Answer in graph (test) | Status |
+|---|---|---|---|---|---|---|
+| WebQSP (RoG) | per-question Freebase subgraph | 2,826 | 246 | 1,628 | 95.64% | processed |
+| CWQ (RoG) | per-question Freebase subgraph | 27,639 | 3,519 | 3,531 | 80.66% | processed |
+| BioHopR | full PrimeKG | — | — | — (single split, 7,633 rows) | — | raw, validated against our KG |
+| Second biomedical benchmark | PrimeKG | — | — | — | — | to be selected |
+
+"Answer in graph" is the share of questions where at least one gold answer appears in the searchable graph. It is an upper bound on coverage for **every** method. The hop-limited ceiling $\rho_H$ is lower still and will be computed by the DP.
+
+---
+
+## PrimeKG (full, uncapped)
+
+Source: `kg_giant.csv`, 8,196,862 rows. Output: `data/processed/primekg_full/` (51 MB).
+
+| Quantity | Value |
+|---|---|
+| Nodes | 134,437 (identified by `(type, source, id)`; no isolated nodes) |
+| Undirected edges | 4,098,431 (stored both ways: 8,196,862 directed) |
+| Relations | 33 = 30 relation types, with `drug_protein` split into target / enzyme / transporter / carrier |
+| Node types | 10 |
+| Nodes with name aliases | 63 (e.g. GOLM2 ≡ CASC4) |
+| Degree | mean 61.0, median 4, p90 132, p99 969, max 17,369 |
+| Highest-degree nodes | anatomy hubs: multi-cellular organism (17,369), small intestine (16,855), testis (16,743) |
+| Build | 22 s, ~5 GB peak RAM |
+
+The CSV lists every edge in both directions (verified: 100% of rows have a reverse). The node count is higher than the 129,375 in the PrimeKG paper because this is a newer Dataverse release.
+
+**Nodes by type**
+
+| Type | Nodes | Type | Nodes |
+|---|---|---|---|
+| biological_process | 28,642 | anatomy | 14,033 |
+| gene/protein | 27,610 | molecular_function | 11,169 |
+| disease | 22,205 | drug | 7,957 |
+| effect/phenotype | 15,311 | cellular_component | 4,176 |
+| pathway | 2,516 | exposure | 818 |
+
+**Largest relations (undirected edges)**
+
+| Relation | Edges | Relation | Edges |
+|---|---|---|---|
+| anatomy_protein_present | 1,518,203 | disease_protein | 92,580 |
+| drug_drug | 1,336,314 | cellcomp_protein | 83,402 |
+| protein_protein | 321,075 | molfunc_protein | 69,530 |
+| disease_phenotype_positive | 176,383 | drug_effect | 64,784 |
+| bioprocess_protein | 144,805 | contraindication | 33,984 |
+
+Two relations hold 70% of all edges, and anatomy hubs have degree above 16k. A 2-hop expansion from a single common disease (asthma) touches 211,769 edges. This is why search is state-based, not path-enumerating.
+
+**Do not use** `data/processed/primekg_graph/` (legacy). It keeps only 6/10 node types and 18/30 relations, and caps `drug_drug` and `anatomy_protein_present` at 500k edges each.
+
+---
+
+## WebQSP and CWQ (RoG release)
+
+Output: `data/processed/{webqsp,cwq}/<split>/` with `csr.npz` (packed per-question CSR), `questions.parquet`, `node_names.parquet`; plus `relations.json` shared across splits.
+
+| | WebQSP train | WebQSP val | WebQSP test | CWQ train | CWQ val | CWQ test |
+|---|---|---|---|---|---|---|
+| Questions | 2,826 | 246 | 1,628 | 27,639 | 3,519 | 3,531 |
+| Answer in subgraph | 96.07% | 95.53% | **95.64%** | 79.92% | 80.93% | **80.66%** |
+| Answer missing (count) | 111 | 11 | 71 | 5,550 | 671 | 683 |
+| Empty subgraph / topic missing | 0 / 0 | 1 / 1 | 0 / 0 | 8 / 8 | 0 / 0 | 0 / 0 |
+| Nodes per subgraph (median) | 1,447 | 1,445 | 1,530 | 1,413 | 1,481 | 1,481 |
+| Directed edges per subgraph (median) | 8,124 | 8,283 | 8,700 | 7,232 | 7,784 | 8,020 |
+| Directed edges total | 23.1M | 2.0M | 13.6M | 212.3M | 28.3M | 29.2M |
+
+| | WebQSP | CWQ |
 |---|---|---|
-| `data/raw/primekg/kg_giant.csv` (852 MB) | ✅ có | Nguồn để dựng PrimeKG đầy đủ: graph cho PrimeKGQA và BioHopR, tính trần `ρ_H`, bảng khoảng cách theo kiểu `d_c`, ánh xạ tên sang node |
-| `data/raw/rog_webqsp` (494 MB) | ✅ đủ: train 2,826 / val 246 / test 1,628 | So với UaG/CPR (Bảng 1); chạy thử CPR (cổng G1–G2); dữ liệu đầu tiên để thử DP và hiệu chỉnh |
-| `data/raw/rog_cwq` (3.3 GB) | ✅ đủ 24 shard: train 27,639 / val 3,519 / test 3,531 (khớp với số CPR dùng) | So với UaG/CPR trên câu hỏi 2–4 hop (Bảng 1, cổng G4) |
-| `models/all-MiniLM-L6-v2` (940 MB) | ✅ load được, dim 384 | Encoder cho câu hỏi, tên node, tên quan hệ (giống UaG/CPR). Chỉ cần `model.safetensors` + config; các thư mục `onnx/`, `openvino/` và file `tf_model.h5`, `rust_model.ot`, `pytorch_model.bin` (~850 MB) xoá được |
-| `data/processed/primekg_graph` (39 MB) | ⚠️ graph bị cắt cạnh | Chỉ để tham khảo, **không** dùng cho thực nghiệm |
-| BioHopR | ❌ chưa tải (13 MB) | Câu hỏi nhiều đáp án, kiểm chứng CRC (Định lý 2) |
-| PrimeKGQA | ❌ chưa tải (1.55 GB) | Dataset y sinh chính: coverage, path vàng từ SPARQL, Mondrian/dịch chuyển phân phối |
+| Base relations (directed with inverses) | 6,094 (12,188) | 6,649 (13,298) |
+| Max hops $H$ | 2 | 4 |
+| Processed size | 445 MB | 3.0 GB |
+| Build time | ~40 s | ~15 min, 5.2 GB peak RAM |
 
-## 0. Chuẩn bị (một lần)
-
-```bash
-source .venv/bin/activate
-```
+- Every question has gold answers (`a_entity` is never empty). The "missing" questions have answers that RoG's subgraph extraction did not include. A case-insensitive name match recovers none of them.
+- These questions stay in calibration and test, with $\sigma^*=+\infty$. Removing them would inflate coverage. Consequence: on CWQ, no method searching these subgraphs can reach $1-\alpha>0.807$.
+- CVT nodes (`m.*`, `g.*`) can be traversed but are never answers.
+- CWQ split sizes match CPR's (24,875 train + 2,764 calibration = 27,639).
 
 ---
 
-## Dataset
+## BioHopR (Findings of ACL 2025; MIT)
 
-### 1. PrimeKG đầy đủ — ĐÃ CÓ
-- **File:** `data/raw/primekg/kg_giant.csv` (8,196,862 dòng, 10 loại node, 30 quan hệ)
-- **Mục đích:** dựng lại graph đầy đủ cho mọi thí nghiệm y sinh (PrimeKGQA, BioHopR). File có sẵn tên, kiểu, ID của node nên dùng luôn để ánh xạ thực thể.
-- **Lưu ý:** **không** dùng `data/processed/primekg_graph/`. Graph đó chỉ có 6 loại node và 18 quan hệ, đồng thời `drug_drug` và `anatomy_protein_present` bị cắt còn 500k cạnh, nên sẽ làm mất đáp án.
-- **Nếu cần tải lại:** https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/IXA7BM (file `kg.csv`)
+| Quantity | Value |
+|---|---|
+| Rows | 7,633 (each row = one 2-hop question; 2,494 unique 1-hop questions) |
+| Answers per question | mean 36.65, median 11, max 890 |
+| Identifiers | entity **names only**, so name → PrimeKG node linking is required (aliases help) |
+| Topic entity mapped by (name, type) | 7,599 / 7,633 (99.55%) |
+| Answers mapped by (name, type) | 275,051 / 279,738 (98.32%) |
+| Mapped answers reachable from the topic via the stated type pattern in 2 hops | 96.90% (400 sampled questions) |
+| Split | none provided; planned random 50/10/15/25 (train/val/cal/test), seed 0 |
 
-### 2. WebQSP (bản RoG) — CẦN TẢI
-- **Mục đích:** benchmark chính để so trực tiếp với UaG và CPR (Bảng 1 của bài). File có sẵn câu hỏi, thực thể chủ đề (`q_entity`), đáp án (`a_entity`) và subgraph Freebase cho từng câu (`graph`).
-- **Dung lượng:** ~0.5 GB
-- **Lệnh:**
-  ```bash
-  hf download rmanluo/RoG-webqsp --repo-type dataset --local-dir data/raw/rog_webqsp
-  ```
-- **Link:** https://huggingface.co/datasets/rmanluo/RoG-webqsp
-- **Kiểm tra sau khi tải:** train khoảng 2,826–2,830 câu, test khoảng 1,628–1,630 câu.
+The reachability check confirms that BioHopR was built on a PrimeKG version compatible with our graph.
 
-### 3. CWQ (bản RoG) — CẦN TẢI
-- **Mục đích:** như WebQSP, nhưng câu hỏi khó hơn (2–4 hop). So với UaG và CPR.
-- **Dung lượng:** ~3.5 GB
-- **Lệnh:**
-  ```bash
-  hf download rmanluo/RoG-cwq --repo-type dataset --local-dir data/raw/rog_cwq
-  ```
-- **Link:** https://huggingface.co/datasets/rmanluo/RoG-cwq
-- **Kiểm tra sau khi tải:** trang HF ghi train 16,900 câu, nhưng CPR và RoG báo 27,639. Nếu lệch, phải lấy đúng split mà CPR dùng.
+2-hop relation patterns:
 
-### 4. PrimeKGQA — CẦN TẢI (thủ công)
-- **Mục đích:** dataset y sinh chính để đo coverage. Có SPARQL nên dựng được path vàng thật để train scorer, và có cấu trúc 2–4 node để chia nhóm theo số hop (Mondrian, dịch chuyển phân phối).
-- **Dung lượng:** ~1.5 GB (3 file: `train_call_bioLLM.json`, `val_call_bioLLM.json`, `test_call_bioLLM.json`)
-- **Link (tải thủ công):** https://zenodo.org/records/13829395 → lưu vào `data/raw/primekgqa/`
-- **Hoặc bằng lệnh** (nếu link file trên Zenodo không đổi):
-  ```bash
-  mkdir -p data/raw/primekgqa && cd data/raw/primekgqa
-  for f in train val test; do curl -L -O "https://zenodo.org/records/13829395/files/${f}_call_bioLLM.json"; done
-  cd -
-  ```
-- **Giấy phép:** CC-BY-4.0
-- **Kiểm tra sau khi tải:** tổng 83,999 câu. IRI trong SPARQL có thể không khớp ID trong `kg_giant.csv`; nếu vậy sẽ ánh xạ theo (tên, kiểu).
-- **Code sinh dữ liệu (tham khảo):** https://github.com/xixi019/primeKGQG
-
-### 5. BioHopR — CẦN TẢI
-- **Mục đích:** câu hỏi nhiều đáp án (1–890 đáp án mỗi câu, trung bình 36.65), dùng để kiểm chứng kiểm soát tỉ lệ bỏ sót bằng CRC (Định lý 2).
-- **Dung lượng:** ~13 MB
-- **Lệnh:**
-  ```bash
-  hf download knowlab-research/BioHopR --repo-type dataset --local-dir data/raw/biohopr
-  ```
-- **Link:** https://huggingface.co/datasets/knowlab-research/BioHopR
-- **Giấy phép:** MIT
-- **Kiểm tra sau khi tải:** khoảng 7,633 dòng. Dataset chỉ có **tên thực thể**, không có ID, nên cần ánh xạ tên sang node PrimeKG (mục tiêu ≥95% khớp).
+| Pattern | Questions | Pattern | Questions |
+|---|---|---|---|
+| drug → gene/protein → disease | 3,029 | disease → drug → gene/protein | 381 |
+| disease → drug → effect/phenotype | 949 | drug → disease → gene/protein | 321 |
+| disease → gene/protein → drug | 899 | effect/phenotype → drug → disease | 215 |
+| gene/protein → disease → drug | 577 | drug → disease → effect/phenotype | 213 |
+| effect/phenotype → disease → drug | 546 | disease → effect/phenotype → drug | 36 |
+| gene/protein → drug → disease | 462 | drug → effect/phenotype → disease | 5 |
 
 ---
 
-## Model
+## Planned split protocol
 
-### 6. all-MiniLM-L6-v2 — CẦN TẢI
-- **Mục đích:** encoder chính cho câu hỏi, tên node và tên quan hệ. Giống model UaG/CPR dùng, để so sánh công bằng.
-- **Dung lượng:** ~90 MB
-- **Lệnh:**
-  ```bash
-  hf download sentence-transformers/all-MiniLM-L6-v2 --local-dir models/all-MiniLM-L6-v2
-  ```
-- **Link:** https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+| Dataset | Train (scorer) | Calibration | Validation | Test |
+|---|---|---|---|---|
+| WebQSP | 2,543 | 283 (10% of train, as in CPR) | 246 (RoG val) | 1,628 |
+| CWQ | 24,875 | 2,764 (10% of train) | 3,519 | 3,531 |
+| BioHopR | 50% | 15% | 10% | 25% |
 
-### 7. BGE-base — CẦN TẢI (cho ablation)
-- **Mục đích:** ablation A8 (đổi encoder).
-- **Dung lượng:** ~440 MB
-- **Lệnh:**
-  ```bash
-  hf download BAAI/bge-base-en-v1.5 --local-dir models/bge-base-en-v1.5
-  ```
-- **Link:** https://huggingface.co/BAAI/bge-base-en-v1.5
-
-### 8. Qwen3-8B — CẦN TẢI, NHƯNG Ở MÁY CÓ GPU
-- **Mục đích:** chỉ baseline CPR cần, để sinh gợi ý quan hệ (1 lần gọi mỗi câu hỏi). CHASE không dùng LLM.
-- **Dung lượng:** ~16 GB (bản AWQ khoảng 6 GB)
-- **Yêu cầu:** CPR chạy model qua vLLM, mà vLLM cần GPU NVIDIA ≥24 GB (≥12 GB nếu dùng AWQ). **Không chạy được trên Mac.**
-- **Lệnh (trên server GPU):**
-  ```bash
-  hf download Qwen/Qwen3-8B --local-dir models/Qwen/Qwen3-8B
-  ```
-- **Link:** https://huggingface.co/Qwen/Qwen3-8B
+Calibration and test always come from the same dataset. This is required for the coverage guarantee. Validity checks also re-split calibration ∪ test 1000 times.
 
 ---
 
-## Code baseline
+## Dropped: PrimeKGQA (ECAI 2024)
 
-### 9. CPR — CẦN CLONE
-- **Mục đích:** baseline chính (nhóm N1). Đồng thời dùng để đo recall của TreeG (cổng G2).
-- **Lệnh:**
-  ```bash
-  git clone https://github.com/betterCallSherlock/CPR third_party/CPR
-  ```
-- **Giấy phép:** MIT
-- **Kiểm tra:** xem repo có ghi seed chia dữ liệu và file split không, để dùng đúng split CPR đã dùng.
+Evaluated on 13 Oct 2026 and removed. **Do not use.**
 
-### 10. SubgraphRAG — CẦN CLONE
-- **Mục đích:** baseline "SubgraphRAG + conformal top-K" (nhóm N1). Code xử lý dữ liệu RoG cũng dùng lại được.
-- **Lệnh:**
-  ```bash
-  git clone https://github.com/Graph-COM/SubgraphRAG third_party/SubgraphRAG
-  ```
-- **Giấy phép:** MIT
+- Its node ids are internal to the authors' SPARQL endpoint. They match neither PrimeKG's `nodes.csv` (0 / 652 sampled ids) nor any node ordering of `kg_giant.csv`.
+- Mapping its entity names to PrimeKG works (98.9%), but only **4.5%** of the facts its questions are built from (1,762 / 38,870 mapped test triples) exist in PrimeKG. Example: "statoconial membrane *interacts with* VPS11". In PrimeKG, statoconial membrane is an anatomy node with a single `anatomy_anatomy` edge. The id → name table used to generate the questions appears to be misaligned, so the natural-language questions describe facts that are not in the KG.
+- 65% of its questions ask for a relation, not an entity.
 
-### 11. UaG — KHÔNG CÓ CODE
-- **Mục đích:** baseline so sánh.
-- **Tình trạng:** link https://github.com/Arstanley/UAG trả về 404 (kiểm tra 10/2026). Sẽ lấy số liệu UaG do CPR báo cáo, và tái hiện thủ tục của UaG trên scorer của CHASE (nhóm N2). Không cần tải gì.
-
----
-
-## Không cần tải
-- STaRK-Prime (đã bỏ khỏi phần chính)
-- DDXPlus (hướng cũ)
-- `kg.csv` gốc của PrimeKG (`kg_giant.csv` đã đủ)
-
-## Tóm tắt dung lượng
-| Mục | Dung lượng | Máy |
-|---|---|---|
-| Dataset 2–5 | ~5.5 GB | Mac |
-| Model 6–7 | ~0.5 GB | Mac |
-| Qwen3-8B | ~16 GB | Server GPU |
+PrimeKG's `nodes.csv` was also dropped. It groups diseases (17,080 disease nodes) while `kg_giant.csv` does not (22,205), so the two files are different releases.
