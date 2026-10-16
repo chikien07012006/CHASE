@@ -84,6 +84,39 @@ class StateScorer(nn.Module):
         stop_logit = self.stop.mlp_part(qh, hops).unsqueeze(1) + self.stop.query_vec(qh, hops) @ enc.stop_node.T
         return BoundScorer(rel_logit.numpy(), step_node.numpy(), stop_logit.numpy())
 
+    def tables(self, q: torch.Tensor, graph: GraphFeatures, H: int,
+               rel_ids: torch.Tensor | None = None, node_ids: torch.Tensor | None = None) -> "ScoreTables":
+        """Differentiable version of bind() for training.
+
+        Restrict to the relations / nodes that occur in the graph being trained on: the
+        returned tables are indexed by position in rel_ids / node_ids (all if None).
+        """
+        rel = graph.relation if rel_ids is None else graph.relation[rel_ids]
+        node = graph.node if node_ids is None else graph.node[node_ids]
+        hops = torch.arange(H + 1)
+        qh = q.unsqueeze(0).expand(H + 1, -1)
+        pre = self.step.in_q(self.step._qh(qh, hops))
+        rel_logit = self.step.out(F.relu(pre.unsqueeze(1) + self.step.in_rel(rel))).squeeze(-1)
+        step_node = self.step.query_vec(qh, hops) @ self.step.Q(node).T
+        stop_logit = self.stop.mlp_part(qh, hops).unsqueeze(1) + self.stop.query_vec(qh, hops) @ self.stop.Q(node).T
+        return ScoreTables(rel_logit=rel_logit, step_node=step_node, stop_logit=stop_logit)
+
+
+@dataclass
+class ScoreTables:
+    """Torch twin of BoundScorer: same tables, kept on the autograd graph."""
+    rel_logit: torch.Tensor   # [H+1, R']
+    step_node: torch.Tensor   # [H+1, N']
+    stop_logit: torch.Tensor  # [H+1, N']
+
+    def edge_scores(self, rel_pos: torch.Tensor, dst_pos: torch.Tensor) -> torch.Tensor:
+        """Nonconformity of every edge at every hop: [H+1, E]."""
+        return nonconformity(self.rel_logit[:, rel_pos] + self.step_node[:, dst_pos])
+
+    def stop_scores(self) -> torch.Tensor:
+        """[H+1, N']"""
+        return nonconformity(self.stop_logit)
+
 
 @dataclass
 class EncodedGraph:
