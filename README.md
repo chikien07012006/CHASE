@@ -1,205 +1,187 @@
+<div align="center">
+
 # CHASE
 
-**Conformal Heuristic Search with Exact Coverage for Multi-hop Evidence Retrieval on Knowledge Graphs**
+### Conformal Heuristic Search with Exact Coverage<br>for Multi-hop Evidence Retrieval on Knowledge Graphs
 
-> **Status (16 Oct 2026):** research in progress. Data pipeline, embedding caches, the state-based scorer, the type-feasibility tables and the bottleneck DP are implemented and tested (96 tests). Reachability ceilings $\rho_H$ are measured on WebQSP and CWQ. Conformal calibration comes next. All numbers below are dataset or pipeline statistics, not experimental results.
+*Prune inside the search with one calibrated threshold, and return an answer set that contains a correct answer with probability ≥ 1 − α: valid, tight, and LLM-free.*
 
-CHASE retrieves multi-hop evidence from a knowledge graph (KG) with a **finite-sample guarantee**: the returned answer set contains a correct answer with probability at least $1-\alpha$. Pruning happens **inside the search** with **a single calibrated threshold**, and the guarantee is **tight rather than conservative**. The motivating domain is biomedicine, where missing a drug–target or drug–drug interaction is a safety failure, not just a lower score.
+![status](https://img.shields.io/badge/status-research%20in%20progress-2a78d6)
+![python](https://img.shields.io/badge/python-3.11-52514e)
+![tests](https://img.shields.io/badge/tests-148%20passing-1baf7a)
+![llm](https://img.shields.io/badge/LLM%20calls-0-52514e)
+
+</div>
+
+> **Status (17 Oct 2026).** The full pipeline (graphs → scorer → bottleneck DP → conformal calibration → two-stage training → official evaluation) is implemented and tested. First results on **WebQSP** are below (single seed). CWQ, BioHopR, same-scorer baselines and multi-seed runs are in progress.
+
+---
+
+## Highlights
+
+- **Exact coverage.** Over 1000 random calibration/test re-splits, empirical coverage matches the split-conformal theory to three decimals at every α (e.g. 0.902 vs 0.901 at α = 0.1). CPR over-covers by 7–31 points, i.e. it is conservative.
+- **Reaches the high-coverage regime.** CHASE certifies α = 0.1 and 0.2 on WebQSP (ECR 87.9% / 77.0%). Neither CPR nor UaG reports these levels.
+- **Smaller sets where it matters.** At matched coverage ≥ 65%, CHASE returns **16–29% fewer answers than CPR** and **3–11× fewer than UaG**.
+- **Cheap and adaptive.** 6.4 ms per question on a single CPU thread with no LLM. Pruning expands ~48 states per question at α = 0.1 vs 462 without pruning.
+- **Conformal training works.** Optimising a differentiable set-size loss cuts validation APSS by 38.7% over BCE-only training.
+
+<p align="center">
+  <img src="docs/figures/fig2_coverage_vs_target.png" width="48%" alt="Requested vs achieved coverage">
+  <img src="docs/figures/fig1_validity_hist.png" width="50%" alt="ECR over 1000 re-splits">
+</p>
 
 ---
 
 ## Contents
 
-- [Motivation](#motivation)
-- [Method](#method)
-- [Research questions](#research-questions)
-- [Benchmarks](#benchmarks)
-- [Project status](#project-status)
-- [Repository layout](#repository-layout)
-- [Setup](#setup)
-- [Reproducing the pipeline](#reproducing-the-pipeline)
-- [Testing](#testing)
-- [Roadmap](#roadmap)
+[Motivation](#motivation) · [Method](#method) · [Results](#results) · [Benchmarks](#benchmarks) · [Repository layout](#repository-layout) · [Setup](#setup) · [Reproducing](#reproducing-the-results) · [Testing](#testing) · [Roadmap](#roadmap)
 
 ---
 
 ## Motivation
 
-Existing conformal KGQA methods make one of two compromises:
+Missing a drug–target or drug–drug interaction is a safety failure, not a lower score. Retrieval for such settings needs a **guarantee**, not a good average. Existing conformal KGQA methods compromise:
 
 | Method | Where the threshold acts | Guarantee | Limitation |
 |---|---|---|---|
-| UaG (AAAI 2025) | Inside beam search; one threshold per hop and component | Calibration couples hops, which breaks exchangeability | Coverage can fail in practice; Freebase only |
-| CPR (arXiv 2605.08077) | Post-hoc filter after a fixed-beam search (TreeG, $32\times32$) | Valid single score per question | Coverage capped by the beam's recall; one LLM call per question; Freebase only |
-| **CHASE** | **Inside the search, one exchangeable score per question** | **Valid and tight:** $1-\alpha \le \text{coverage} \le 1-\alpha+\tfrac{1}{n+1}$ | Ceiling set only by what the KG can reach in $H$ hops |
+| UaG (AAAI 2025) | Inside beam search; one threshold per hop | Per-hop calibration breaks exchangeability | Coverage can fail; Freebase only |
+| CPR (arXiv 2605.08077) | Post-hoc filter after a fixed beam (TreeG 32×32) | Valid, but conservative; ignores τ̂ = ∞ | Coverage capped by beam recall; one LLM call per question |
+| **CHASE** | **Inside the search, one exchangeable score per question** | **Valid and tight:** 1 − α ≤ coverage ≤ 1 − α + 1/(n+1) | Capped only by KG reachability ρ_H |
 
 ## Method
 
-1. **State-based scorer.** A question-conditioned nonconformity score $s_h(q,r,v)$ for each expansion step and $s^{\text{stop}}_h(q,v)$ for stopping (lower is more promising). Each score is a sum of a relation term and a node term, so per-question lookup tables make scoring any edge a gather plus an add.
-2. **Type feasibility.** On typed KGs, $d_c(v)$, the hop distance from $v$ to the nearest node of type $c$, is precomputed. A state $(v,h)$ is kept only if an answer-typed node is still reachable in the remaining $H-h$ hops. This rule provably never removes a feasible walk.
-3. **Max-prefix score.** A walk survives irreversible pruning at threshold $\tau$ iff every step scores $\le\tau$, i.e. iff $\bar s(p)=\max_i s_i\le\tau$.
-4. **Bottleneck DP.** Because scores depend on the state $(v,h)$ and not on the whole path,
-   $b_h(v)=\min_{u\to v}\max\{b_{h-1}(u),\,s_h(q,r,v)\}$
-   gives the exact minimal surviving threshold for every node in $O(H(|V|+|E|))$. There is no beam and no hard cap.
-5. **Calibration.** Each question's score $\sigma^*(q)=\min_{a\in A_q}\sigma_a(q)$ is *the smallest threshold at which the search finds an answer*. Split-conformal quantiles of $\sigma^*$ give the test-time threshold $\hat\tau$. If $1-\alpha$ exceeds what the KG can reach, CHASE reports the level as **infeasible** instead of returning a meaningless set.
-6. **Multi-answer recall.** For questions with many answers, conformal risk control on per-answer bottleneck values bounds the expected miss rate.
+```
+question + topic entities ─► state-based scorer ─► bottleneck DP, pruned at τ̂ ─► answer set + evidence walks
+                                                              ▲
+              calibration set ─► unpruned DP ─► σ*(q) per question ─► conformal quantile ─► τ̂
+```
 
-Full method, proofs and experiment plan: [`proposal_chase.tex`](proposal_chase.tex).
+1. **State-based scorer.** A step head scores each expansion (hop $h$, relation $r$, node $v$); a stop head scores returning $v$ at hop $h$. Each head is $\mathrm{MLP}([q;r;h]) + \langle P(q,h), Q(v)\rangle$ with frozen MiniLM inputs, and the nonconformity is $s=\mathrm{softplus}(-\text{logit})$. The logit is additive, so scoring any edge is a table lookup: 1M edges in 37 ms.
+2. **Max-prefix score.** Irreversible pruning keeps a walk iff every step scores ≤ τ, so a walk's cost is its worst step.
+3. **Bottleneck DP.** $b_h(v)=\min_{u\to v}\max\{b_{h-1}(u),\,s_h(q,r,v)\}$ gives, for every node, $\sigma_v$ = the smallest threshold at which the search returns $v$. It is exact, takes $O(H(|V|+|E|))$, and needs no beam or hard cap.
+4. **Calibration.** $\sigma^*(q)=\min_{a\in A_q}\sigma_a$ is the smallest threshold at which the search finds a correct answer. Split-conformal quantiles of $\sigma^*$ give $\hat\tau$. Because "found" ⇔ $\sigma^*\le\tau$, coverage is tight. Levels above the KG ceiling are reported as **infeasible**.
+5. **Two-stage training.** Stage 1 trains a BCE loss on steps and stops, with labels from filtered gold paths. Stage 2 extends ConfTr to graph search: a soft bottleneck DP plus a differentiable quantile on half a batch, minimising the soft number of *wrong* answers returned on the other half.
+6. **Type feasibility (typed KGs)** and **conformal risk control** for multi-answer recall are implemented for the biomedical benchmark.
 
-## Research questions
+Full method, proofs and experiment plan: [`proposal_chase.tex`](proposal_chase.tex). Weekly report with the full analysis: [`reports/2026-10-17_weekly_report.md`](reports/2026-10-17_weekly_report.md).
 
-| | Question |
-|---|---|
-| RQ1 | **Validity:** does empirical coverage track $1-\alpha$ over 1000 calibration/test re-splits, including small $\alpha$? |
-| RQ2 | **Efficiency:** at equal $\alpha$, are CHASE's answer sets smaller and its searches cheaper than CPR, conformal top-$K$ and SubgraphRAG + conformal? |
-| RQ3 | **Attainable coverage:** what is each method's coverage ceiling relative to KG reachability $\rho_H$? |
-| RQ4 | **Adaptivity:** does search cost scale with question difficulty? |
-| RQ5 | **Multi-answer and group coverage:** CRC on BioHopR; Mondrian by hop count and relation pattern; distribution shift (1-hop to 2-hop). |
-| RQ6 | **Ablations** of every component. |
+## Results
+
+**WebQSP**, official split (283 calibration / 1,628 test, same sizes as CPR), H = 2, single seed. ECR (%) / APSS (average number of answer entities). CPR and UaG numbers are as reported in the CPR paper; "—" = not reported.
+
+| Method | α=0.05 | α=0.1 | α=0.2 | α=0.3 | α=0.4 | α=0.5 | α=0.6 | α=0.7 | α=0.8 |
+|---|---|---|---|---|---|---|---|---|---|
+| target 1−α | 95 | 90 | 80 | 70 | 60 | 50 | 40 | 30 | 20 |
+| UaG | — | — | — | 72.3 / 98.81 | 60.4 / 32.52 | 51.8 / 14.29 | 41.8 / 8.23 | 37.4 / 5.58 | 25.6 / 1.67 |
+| CPR | — | — | — | 76.8 / 17.77 | 67.3 / 10.10 | 61.4 / 7.14 | 58.3 / 5.45 | 55.1 / 3.01 | 50.8 / 1.62 |
+| **CHASE** | 91.4 / 62.97† | **87.9 / 31.67** | **77.0 / 12.77** | 68.4 / 8.79 | 57.6 / 6.01 | 50.3 / 4.63 | 43.7 / 3.57 | 33.2 / 2.56 | 19.9 / 1.32 |
+
+† α = 0.05 is at the reachability ceiling (ρ₂ = 95.33%); 40% of re-splits return τ̂ = ∞.
+
+**Matched coverage.** CPR over-covers, so comparing at equal α favours it. Comparing at equal ECR, with CHASE interpolated:
+
+| CPR ECR | 76.8% | 67.3% | 61.4% | 58.3% | 55.1% | 50.8% |
+|---|---|---|---|---|---|---|
+| CPR APSS | 17.77 | 10.10 | 7.14 | 5.45 | 3.01 | 1.62 |
+| CHASE APSS | **12.7** | **8.5** | 6.9 | 6.2 | 5.5 | 4.7 |
+
+CHASE wins in the high-coverage regime. CPR wins below ~60% coverage, where a single global threshold leaves many CHASE sets empty (33% at α = 0.5) while others stay large.
+
+<p align="center">
+  <img src="docs/figures/fig3_apss_efficiency.png" width="90%" alt="APSS and coverage efficiency vs alpha">
+</p>
+
+<p align="center">
+  <img src="docs/figures/fig5_cost.png" width="90%" alt="Search cost">
+</p>
+
+<p align="center">
+  <img src="docs/figures/fig6_training_curves.png" width="70%" alt="Training curves">
+</p>
 
 ## Benchmarks
 
-| Dataset | Searchable KG | Role | Test questions | Answer in graph (test)\* | $\rho_1$ | $\rho_2$ | $\rho_3$ | $\rho_4$ |
-|---|---|---|---|---|---|---|---|---|
-| WebQSP (RoG) | Freebase, one subgraph per question | Direct comparison with UaG and CPR | 1,628 | 95.64% | 66.28% | **95.33%** | 95.33% | 95.33% |
-| CWQ (RoG) | Freebase, one subgraph per question | Direct comparison, 2–4 hops | 3,531 | 80.66% | 43.95% | **80.12%** | 80.12% | 80.12% |
-| BioHopR | Full PrimeKG (134k nodes, 4.1M edges) | Biomedical, multi-answer (36.65 answers per question) | own split | — | — | — | — | — |
+| Dataset | Searchable KG | Role | Test | Answer in graph | ρ₁ | ρ₂ |
+|---|---|---|---|---|---|---|
+| WebQSP (RoG) | Freebase, one subgraph per question | Direct comparison with UaG / CPR | 1,628 | 95.64% | 66.28% | **95.33%** |
+| CWQ (RoG) | Freebase, one subgraph per question | Direct comparison, compositional | 3,531 | 80.66% | 43.95% | **80.12%** |
+| BioHopR | Full PrimeKG (134k nodes, 4.1M edges) | Biomedical, multi-answer (36.65 answers / question) | own split | — | — | — |
 
-\*Share of questions whose gold answer appears anywhere in the searchable graph. $\rho_H$ is the tighter ceiling: the share of questions with a gold answer **reachable from a topic entity within $H$ hops** (walks; topic entities and CVT nodes are never answers). Both bound coverage for **every** method. Full statistics in [`DATA.md`](DATA.md).
-
-**What the ceilings imply.**
-- $\rho_H$ stops growing at $H=2$ on both datasets. RoG subgraphs are 2-hop neighbourhoods of the topic entities, so the ~20% of CWQ questions that need 3–4 hops have their answers outside the subgraph. On these subgraphs, $H>2$ adds search cost but no reachable answers.
-- No method can reach $1-\alpha$ above 95.33% on WebQSP or above 80.12% on CWQ. With finite calibration sets, levels just below the ceiling are often infeasible too. In practice the feasible grid is $\alpha\ge0.1$ on WebQSP and $\alpha\ge0.25$ on CWQ.
-
-## Project status
-
-| Component | Proposal § | Code | Tests | Output |
-|---|---|---|---|---|
-| Full PrimeKG graph (CSR, no edge caps) | 5.2 | `chase/kg/graph.py`, `build_primekg.py` | manual checks (symmetry, `expand`, known facts) | `primekg_full/` (51 MB) |
-| WebQSP / CWQ per-question subgraph stores | 5.2 | `chase/kg/build_freebase.py`, `subgraphs.py` | manual checks (inverse consistency, gold paths) | `webqsp/` (445 MB), `cwq/` (3.0 GB) |
-| Frozen MiniLM embedding caches | 4.2 | `chase/model/text_cache.py` | — | `*/emb_minilm/` (98 MB, 419 MB, 800 MB) |
-| Graph features (shared interface) | 4.2 | `chase/model/features.py` | via scorer tests | — |
-| State-based scorer (step and stop heads, `bind()` fast path) | 4.2 | `chase/model/scorer.py` | `tests/test_scorer.py` (5) | — |
-| Type-feasibility tables $d_c(v)$ | 4.3 | `chase/kg/type_distance.py` | `tests/test_type_distance.py` (8) | `primekg_full/type_dist.npz` (1.3 MB) |
-| Threshold search and bottleneck DP (calibration $\tau=\infty$ and test $\tau=\hat\tau$ modes, evidence walks, $\rho_H$) | 4.4–4.5 | `chase/search/dp.py` | `tests/test_dp.py` (83) | $\rho_H$ for WebQSP / CWQ |
-| Conformal calibration (split CP, CRC, Mondrian) | 4.6 | — | — | — |
-| BioHopR linking and splits for all benchmarks | 5.2–5.3 | — | — | — |
-| Gold paths, scorer training | 4.7 | — | — | — |
-| Baselines | 5.4 | — | — | — |
-
-**Pipeline measurements (Apple-silicon laptop, CPU):**
-
-| Step | Time |
-|---|---|
-| Score 1M PrimeKG edges with a bound scorer | 37 ms |
-| Bind one question on PrimeKG / one WebQSP question end-to-end | 9.3 ms / 7.6 ms |
-| Type-distance tables for PrimeKG (10 multi-source BFS, 4 layers) | 2.3 s |
-| $\rho_{1..4}$ over all test questions: WebQSP (1,628) / CWQ (3,531) | 3 s / 6 s |
-
-**Type feasibility on PrimeKG:** share of nodes within $k$ hops of the nearest node of each type.
-
-| Answer type | $k=0$ | $k=1$ | $k=2$ | $k=3$ | $k=4$ |
-|---|---|---|---|---|---|
-| drug | 5.9% | 10.8% | 44.3% | 78.0% | 89.6% |
-| disease | 16.5% | 32.2% | 60.2% | 82.9% | 91.2% |
-| gene/protein | 20.5% | 47.5% | 75.4% | 89.0% | 94.1% |
-| effect/phenotype | 11.4% | 21.0% | 48.4% | 79.3% | 90.3% |
-
-With $H=2$ (BioHopR), a state at hop 1 needs $d_c\le1$, which only 11–48% of nodes satisfy depending on the answer type. The rule is therefore selective at the last expansion step and loose earlier. Its effect on real search cost is measured in ablation A2.
+ρ_H is the share of questions with a gold answer reachable within H hops: an upper bound on coverage for **every** method. It stops growing at H = 2, because RoG subgraphs are 2-hop neighbourhoods. Full statistics: [`DATA.md`](DATA.md).
 
 ## Repository layout
 
 ```
 chase/
-  kg/
-    graph.py            KG class: CSR storage, vectorised frontier expansion
-    build_primekg.py    full PrimeKG -> CSR
-    build_freebase.py   RoG WebQSP/CWQ -> packed per-question subgraphs
-    subgraphs.py        SubgraphStore: random access to per-question KGs
-    type_distance.py    multi-source BFS, d_c(v) tables, feasibility mask
-  model/
-    text_cache.py       frozen MiniLM embeddings for nodes, relations, questions
-    features.py         GraphFeatures: node / relation feature matrices per graph
-    scorer.py           StateScorer (step + stop heads), EncodedGraph, BoundScorer
-  search/
-    dp.py               bottleneck DP, DPResult (answer sets, sigma*, evidence walks), rho_H
-tests/
-  test_scorer.py
-  test_type_distance.py
-  test_dp.py
-proposal_chase.tex      method, theory and experiment plan
-DATA.md                 statistics of every processed dataset
-requirements.txt
+  kg/          graph.py (CSR KG) · build_primekg.py · build_freebase.py · subgraphs.py · type_distance.py
+  model/       text_cache.py (frozen MiniLM) · features.py · scorer.py (StateScorer, BoundScorer, ScoreTables)
+  search/      dp.py (bottleneck DP, evidence walks, rho_H)
+  conformal/   split.py (split CP, CRC) · calibrate.py (calibration scores from the DP)
+  data/        splits.py · gold_paths.py (path enumeration + coincidental-path filter)
+  train/       losses.py (BCE, soft DP, ConfTr) · sampler.py · train.py · evaluate.py
+  eval/        freebase.py (official evaluation) · plots.py · reference.py (published baselines)
+tests/         148 unit tests
+docs/figures/  figures used in this README
+reports/       weekly reports
+proposal_chase.tex · DATA.md · requirements.txt
 ```
 
 ## Setup
 
-Python 3.11.
-
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-The encoder is expected at `models/all-MiniLM-L6-v2` (only `model.safetensors` and the config/tokenizer files are needed):
-
-```bash
 hf download sentence-transformers/all-MiniLM-L6-v2 --local-dir models/all-MiniLM-L6-v2 \
   --include "*.json" "*.txt" "model.safetensors" "1_Pooling/*"
 ```
 
-## Reproducing the pipeline
+Raw data goes under `data/raw/` (git-ignored): PrimeKG `kg_giant.csv` (Harvard Dataverse), RoG-WebQSP / RoG-CWQ (Hugging Face `rmanluo/*`), BioHopR (Hugging Face `knowlab-research/BioHopR`).
 
-Raw data lives under `data/raw/` and processed data under `data/processed/`; both are git-ignored. Sources: PrimeKG `kg_giant.csv` (Harvard Dataverse), RoG-WebQSP and RoG-CWQ (Hugging Face `rmanluo/*`), BioHopR (Hugging Face `knowlab-research/BioHopR`).
+## Reproducing the results
+
+WebQSP end to end (CWQ: replace `webqsp` with `cwq`). Times are for an Apple-silicon laptop, CPU only.
 
 ```bash
-# 1. graphs
-python -m chase.kg.build_primekg  --csv data/raw/primekg/kg_giant.csv --out data/processed/primekg_full   # ~22 s
-python -m chase.kg.build_freebase --raw data/raw/rog_webqsp --out data/processed/webqsp                   # ~40 s
-python -m chase.kg.build_freebase --raw data/raw/rog_cwq    --out data/processed/cwq                      # ~15 min
+D=data/processed/webqsp
+python -m chase.kg.build_freebase --raw data/raw/rog_webqsp --out $D          # subgraphs          ~40 s
+python -m chase.model.text_cache freebase $D                                  # MiniLM cache       ~3 min
+python -m chase.data.splits --data $D                                         # train/cal/val/test
+python -m chase.data.gold_paths --data $D --split train --H 2                 # training labels    ~6 s
+python -m chase.train.train --data $D --out runs/webqsp_seed0                 # two-stage training ~10 min
+python -m chase.eval.freebase --data $D --model runs/webqsp_seed0/best.pt \
+                              --out runs/webqsp_seed0/eval                    # evaluation         ~2 min
+```
 
-# 2. frozen text embeddings
-python -m chase.model.text_cache primekg  data/processed/primekg_full   # ~1 min
-python -m chase.model.text_cache freebase data/processed/webqsp         # ~3 min
-python -m chase.model.text_cache freebase data/processed/cwq            # ~5 min
+The evaluation writes `results_table.md`, `results.csv`, `metrics.json`, `validity.json` (1000 re-splits), `per_question.parquet` and six figures (PNG + PDF) to the `--out` folder.
 
-# 3. type-feasibility tables (typed KGs only)
-python -m chase.kg.type_distance --kg data/processed/primekg_full       # ~2 s
+Biomedical graph (PrimeKG):
 
-# 4. reachability ceilings rho_H (no scorer needed)
-python -m chase.search.dp --data data/processed/webqsp --split test --H 1 2 3 4   # ~3 s
-python -m chase.search.dp --data data/processed/cwq    --split test --H 1 2 3 4   # ~6 s
+```bash
+python -m chase.kg.build_primekg --csv data/raw/primekg/kg_giant.csv --out data/processed/primekg_full
+python -m chase.model.text_cache primekg data/processed/primekg_full
+python -m chase.kg.type_distance --kg data/processed/primekg_full
 ```
 
 ## Testing
 
 ```bash
-python -m pytest tests -v
+python -m pytest tests -q        # 148 tests, ~10 s
 ```
 
-| Test file | What it checks |
-|---|---|
-| `test_scorer.py` | `bind()` lookup tables equal the full `forward()` pass; scores are finite and non-negative; numerically stable softplus; gradients reach both heads |
-| `test_type_distance.py` | multi-source BFS matches networkx; the feasibility rule never drops a walk that reaches the answer type within $H$ hops (Lemma 1); error on out-of-range queries; save/load round trip |
-| `test_dp.py` | $\sigma_v$ equals brute-force enumeration of every walk (with ties, answer masks and feasibility masks); a pruned run returns exactly the unpruned answer set; answer sets are nested in $\tau$; evidence walks are real walks whose score equals $\sigma_v$; topic entities are never answers; the zero scorer reduces to reachability |
+The key invariants are checked against brute force: the DP's σ equals enumeration of every walk; a pruned search returns exactly the unpruned answer set; the soft DP converges to the hard DP as T → 0; split-conformal and CRC thresholds meet their guarantees in simulation; `bind()` lookup tables equal the full forward pass.
 
 ## Roadmap
 
-- [x] Literature review and positioning against UaG / CPR
-- [x] Full PrimeKG graph (CSR, no edge caps)
-- [x] WebQSP / CWQ per-question subgraph stores
-- [x] Frozen MiniLM embedding caches for all graphs
-- [x] State-based scorer with tested fast path
-- [x] Type-feasibility tables for PrimeKG
-- [x] Bottleneck DP with brute-force equivalence tests
-- [x] Reachability ceilings $\rho_H$ for WebQSP and CWQ
-- [ ] Conformal calibration (split CP, CRC, Mondrian) with synthetic coverage tests
-- [ ] Reachability ceiling $\rho_H$ for BioHopR
-- [ ] BioHopR entity linking; calibration splits for all benchmarks
-- [ ] Gold paths; BCE and conformal training of the scorer
-- [ ] Baselines: CPR (official code), UaG-style per-hop, Bonferroni, fixed-beam + post-hoc, conformal top-$K$, SubgraphRAG + CP
-- [ ] Experiments RQ1–RQ6; paper
+- [x] Full PrimeKG graph; WebQSP / CWQ subgraph stores; MiniLM caches
+- [x] State-based scorer, type feasibility, bottleneck DP, reachability ceilings
+- [x] Conformal calibration (split CP, CRC)
+- [x] Gold paths, sampler, two-stage training (BCE + conformal training)
+- [x] Official evaluation, 1000-re-split validity check, figures: **WebQSP**
+- [ ] Same-scorer baselines: per-hop (UaG-style), Bonferroni, fixed beam + post-hoc (CPR-style), conformal top-K
+- [ ] Low-coverage regime: richer state (previous relation), non-empty sets
+- [ ] Five seeds, paired bootstrap; CWQ
+- [ ] BioHopR (entity linking, CRC); CPR re-run under identical conditions
+- [ ] Ablations RQ6; paper
 
 ## Citation
 
