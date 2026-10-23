@@ -89,7 +89,7 @@ def comparison_table(rows: list[dict], reference: dict, rho: float) -> str:
     cells = [f"{100 * r['ecr']:.1f} / {r['apss']:.2f}" if r["feasible"] else "—" for r in rows]
     lines.append("| **CHASE** | " + " | ".join(cells) + " |")
     lines += ["", f"Target coverage 1−α: " + ", ".join(f"{1 - r['alpha']:.2f}" for r in rows),
-              f"Reachability ceiling ρ (test): {rho:.4f}. '—' = not reported, or the level is infeasible."]
+              f"Reachability ceiling ρ (test): {rho:.4f}. '—' = not reported (α < 0.3), coverage failed (ECR < 1−α, as in CPR's table), or infeasible."]
     return "\n".join(lines)
 
 

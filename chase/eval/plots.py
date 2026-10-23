@@ -13,7 +13,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-METHOD_COLOUR = {"CHASE": "#2a78d6", "CPR": "#eb6834", "UaG": "#1baf7a"}
+METHOD_COLOUR = {"CHASE": "#2a78d6", "CPR": "#eb6834", "UaG": "#1baf7a", "CLM": "#9b59b6", "LoFreeCP": "#c9a227"}
 STAGE_COLOUR = {1: "#2a78d6", 2: "#eb6834"}
 INK, INK_2, GRID, SURFACE = "#0b0b0b", "#52514e", "#e6e5e1", "#fcfcfb"
 

@@ -33,6 +33,26 @@ def test_splits_are_deterministic_and_roundtrip(tmp_path):
     assert load_splits(tmp_path) == a
 
 
+def test_cal_never_shares_a_seed_question_with_train(tmp_path):
+    rng = np.random.default_rng(0)
+    qids = [f"WebQTrn-{g}_{j}" for g in range(400) for j in range(rng.integers(1, 15))]
+    for store, q in {"train": qids, "validation": ["v"], "test": ["t"]}.items():
+        (tmp_path / store).mkdir()
+        pd.DataFrame({"qid": q}).to_parquet(tmp_path / store / "questions.parquet")
+    s = make_freebase_splits(tmp_path, cal_fraction=0.1, seed=0)
+    prefix = lambda idx: {qids[i].split("_")[0] for i in idx}
+    assert not prefix(s["train"]["indices"]) & prefix(s["cal"]["indices"])
+    assert sorted(s["train"]["indices"] + s["cal"]["indices"]) == list(range(len(qids)))
+    n_cal = len(s["cal"]["indices"])
+    assert round(0.1 * len(qids)) <= n_cal < round(0.1 * len(qids)) + 15   # overshoot < one group
+
+
+def test_singleton_groups_give_the_per_question_draw(tmp_path):
+    _fake_store(tmp_path, {"train": 2826, "validation": 3, "test": 3})
+    perm = np.random.default_rng(0).permutation(2826)
+    assert make_freebase_splits(tmp_path, seed=0)["cal"]["indices"] == sorted(perm[:283].tolist())
+
+
 # ------------------------------------------------------------------ gold paths
 
 def _kg(edges, n):
