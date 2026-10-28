@@ -24,7 +24,7 @@ class TrainConfig:
     alpha: float = 0.1               # main miscoverage level of this dataset
     stage1_epochs: int = 50          # upper bounds; early stopping usually ends a stage sooner
     stage2_epochs: int = 20
-    patience: int = 4                # stop a stage after this many epochs without a better val APSS
+    patience: int = 8                # stop a stage after this many epochs without a better val APSS
     lr1: float = 1e-3
     lr2: float = 3e-4
     weight_decay: float = 0.01

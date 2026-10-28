@@ -72,6 +72,18 @@ def test_sigma_matches_brute_force(seed, with_mask, with_feasible):
 
 
 @pytest.mark.parametrize("seed", range(10))
+def test_sigma_star_is_min_over_many_answers(seed):
+    # several gold answers, some masked out, unreachable or topic entities: sigma* = min over the reachable ones
+    kg, scorer, topic, mask, _ = _case(seed, with_mask=True)
+    brute = _brute_force_sigma(kg, topic, scorer, 1.0, mask, None)
+    res = bottleneck_dp(kg, topic, scorer, H, answer_mask=mask)
+    answers = np.random.default_rng(seed).choice(N, 6, replace=False).tolist() + list(topic)
+    assert res.sigma_star(answers) == brute[answers].min()
+    unreachable = [v for v in range(N) if not np.isfinite(brute[v])]
+    assert res.sigma_star(unreachable) == INF
+
+
+@pytest.mark.parametrize("seed", range(10))
 def test_pruned_run_returns_same_answer_set_and_is_nested(seed):
     kg, scorer, topic, mask, _ = _case(seed, with_mask=True)
     full = bottleneck_dp(kg, topic, scorer, H, answer_mask=mask)

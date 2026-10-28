@@ -42,24 +42,52 @@ def metrics_at(cal: list[SigmaRecord], test: list[SigmaRecord], alpha: float) ->
     return row
 
 
+def resplit_samples(cal: list[SigmaRecord], test: list[SigmaRecord], alphas, n_splits: int = 1000,
+                    seed: int = 0) -> dict[float, dict[str, np.ndarray]]:
+    """Pool cal + test, re-split with the same sizes n_splits times; per alpha and split: ECR, APSS, empty share.
+
+    tau_hat comes from the calibration part of each split (NaN metrics where tau_hat = INF).
+    """
+    recs = cal + test
+    pooled = np.array([r.sigma_star for r in recs])
+    n_cal, n_test = len(cal), len(test)
+    rng = np.random.default_rng(seed)
+    perms = np.stack([rng.permutation(len(pooled)) for _ in range(n_splits)])
+    cal_sorted = np.sort(pooled[perms[:, :n_cal]], axis=1)
+    in_test = np.zeros((n_splits, len(pooled)), dtype=bool)
+    np.put_along_axis(in_test, perms[:, n_cal:], True, axis=1)
+    out = {}
+    for a in alphas:
+        k = math.ceil((n_cal + 1) * (1 - a))
+        tau = cal_sorted[:, k - 1] if k <= n_cal else np.full(n_splits, INF)
+        ok = np.isfinite(tau)
+        hit = np.isfinite(pooled)[None, :] & (pooled[None, :] <= tau[:, None])
+        sizes = np.stack([np.searchsorted(r.sorted_sigma, tau, side="right") for r in recs], axis=1)
+        out[a] = {"ecr": np.where(ok, (hit & in_test).sum(1) / n_test, np.nan),
+                  "apss": np.where(ok, (sizes * in_test).sum(1) / n_test, np.nan),
+                  "empty": np.where(ok, ((sizes == 0) & in_test).sum(1) / n_test, np.nan)}
+    return out
+
+
+def _summarise(s: dict[str, np.ndarray]) -> dict:
+    ok = np.isfinite(s["ecr"])
+    mean = lambda x: float(x[ok].mean()) if ok.any() else float("nan")
+    return {"infeasible_share": float(np.mean(~ok)), "ecr_mean": mean(s["ecr"]), "apss_mean": mean(s["apss"]),
+            "apss_std": float(s["apss"][ok].std()) if ok.any() else float("nan"), "empty_mean": mean(s["empty"])}
+
+
 def validity_resplits(cal: list[SigmaRecord], test: list[SigmaRecord], alphas, n_splits: int = 1000,
                       seed: int = 0) -> tuple[dict, dict[float, np.ndarray]]:
-    """Protocol P2: pool cal + test, re-split with the same sizes n_splits times, record ECR.
+    """Protocol P2: pool cal + test, re-split with the same sizes n_splits times, record ECR (and APSS).
 
     Theory for split conformal (continuous scores): coverage given the calibration set is
     Beta(k, n+1-k), k = ceil((n+1)(1-alpha)); the test ECR adds Binomial noise over n_test questions.
     """
-    pooled = np.array([r.sigma_star for r in cal] + [r.sigma_star for r in test])
     n_cal, n_test = len(cal), len(test)
-    rng = np.random.default_rng(seed)
-    perms = [rng.permutation(len(pooled)) for _ in range(n_splits)]
+    raw = resplit_samples(cal, test, alphas, n_splits, seed)
     summary, samples = {}, {}
     for a in alphas:
-        ecr = np.full(n_splits, np.nan)
-        for j, p in enumerate(perms):
-            tau = conformal_quantile(pooled[p[:n_cal]], a)
-            if np.isfinite(tau):
-                ecr[j] = covered(pooled[p[n_cal:]], tau).mean()
+        ecr = raw[a]["ecr"]
         k = math.ceil((n_cal + 1) * (1 - a))
         ok = ecr[np.isfinite(ecr)]
         s = {"alpha": a, "target": 1 - a, "n_cal": n_cal, "n_test": n_test, "k": k,
@@ -69,6 +97,7 @@ def validity_resplits(cal: list[SigmaRecord], test: list[SigmaRecord], alphas, n
              "ecr_q05": float(np.quantile(ok, 0.05)) if ok.size else float("nan"),
              "ecr_q95": float(np.quantile(ok, 0.95)) if ok.size else float("nan"),
              "below_target_share": float(np.mean(ok < 1 - a)) if ok.size else float("nan")}
+        s.update({key: v for key, v in _summarise(raw[a]).items() if key in ("apss_mean", "apss_std", "empty_mean")})
         if k <= n_cal:
             beta = stats.beta(k, n_cal + 1 - k)
             s.update(theory_mean=float(beta.mean()), theory_upper=1 - a + 1 / (n_cal + 1),
@@ -76,6 +105,44 @@ def validity_resplits(cal: list[SigmaRecord], test: list[SigmaRecord], alphas, n
         summary[str(a)] = s
         samples[a] = ecr
     return summary, samples
+
+
+CURVE_ALPHAS = [round(a, 2) for a in np.arange(0.02, 0.86, 0.01)]
+
+
+def matched_coverage(cal: list[SigmaRecord], test: list[SigmaRecord], reference: dict, n_splits: int = 1000,
+                     seed: int = 0) -> dict:
+    """Compare at equal coverage without touching test labels.
+
+    For every reported (ECR, APSS) of another method, calibrate CHASE at target 1 - alpha' = that ECR and
+    report its re-split means (exact coverage on average, by the split-conformal guarantee) and the official
+    split. "curve" is the same re-split summary on a dense alpha grid: APSS as a function of coverage.
+    """
+    targets = {round(1 - ecr / 100, 4) for table in reference.values() for ecr, _ in table.values()}
+    grid = sorted(set(CURVE_ALPHAS) | targets)
+    summ = {a: _summarise(s) for a, s in resplit_samples(cal, test, grid, n_splits, seed).items()}
+    points = []
+    for name, table in reference.items():
+        for ref_alpha, (ecr, apss) in sorted(table.items()):
+            a = round(1 - ecr / 100, 4)
+            off = metrics_at(cal, test, a)
+            points.append({"method": name, "ref_alpha": ref_alpha, "ref_ecr": ecr / 100, "ref_apss": apss, "alpha": a,
+                           "official": {k: off.get(k) for k in ("feasible", "ecr", "apss", "empty_share")},
+                           "resplit": summ[a]})
+    return {"points": points, "curve": [{"alpha": a, **summ[a]} for a in CURVE_ALPHAS]}
+
+
+def matched_table(points: list[dict]) -> str:
+    """Markdown: each reported point of another method vs CHASE calibrated at that coverage."""
+    lines = ["**Equal coverage** (CHASE calibrated on cal at target = the other method's ECR; re-split means)", "",
+             "| Method | α | ECR % | APSS | CHASE target α' | CHASE ECR % | CHASE APSS | APSS ratio |",
+             "|---|---|---|---|---|---|---|---|"]
+    for p in points:
+        r = p["resplit"]
+        ratio = r["apss_mean"] / p["ref_apss"] if np.isfinite(r["apss_mean"]) else float("nan")
+        lines.append(f"| {p['method']} (reported) | {p['ref_alpha']} | {100 * p['ref_ecr']:.1f} | {p['ref_apss']:.2f} | "
+                     f"{p['alpha']:.3f} | {100 * r['ecr_mean']:.1f} | {r['apss_mean']:.2f} | {ratio:.2f} |")
+    return "\n".join(lines)
 
 
 def comparison_table(rows: list[dict], reference: dict, rho: float) -> str:
@@ -157,28 +224,33 @@ def run(data: str, model: str, out: str, H: int, lam: float | None, alphas, main
                "rho_test": rho, "min_feasible_alpha": min(feasible) if feasible else None,
                "main_alpha": main_alpha, "rows": rows, "seconds": round(time.time() - t0, 1)}
     reference = reference_for(dataset)
+    matched = matched_coverage(cal, test, reference, n_splits)
     (out_dir / "metrics.json").write_text(json.dumps(summary, indent=2, default=float))
     (out_dir / "validity.json").write_text(json.dumps(validity, indent=2))
+    (out_dir / "matched.json").write_text(json.dumps(matched, indent=2, default=float))
     np.savez(out_dir / "validity_ecr.npz", **{f"alpha_{a}": v for a, v in samples.items()})
     pd.DataFrame(rows).to_csv(out_dir / "results.csv", index=False)
-    (out_dir / "results_table.md").write_text(comparison_table(rows, reference, rho))
+    (out_dir / "results_table.md").write_text(comparison_table(rows, reference, rho) + "\n\n"
+                                              + matched_table(matched["points"]))
     if per_q is not None:
         per_q.to_parquet(out_dir / "per_question.parquet", index=False)
 
     history_path = Path(model).parent / "history.json"
     history = json.loads(history_path.read_text()) if history_path.exists() else None
-    figs = plots.make_all(out_dir / "figures", rows, validity, samples, sizes_by_alpha,
-                          per_q if per_q is not None else pd.DataFrame(columns=["best_hop", "states_expanded", "topic_degree"]),
-                          reference, rho, main_alpha, history)
+    plots.make_all(out_dir / "figures", rows, validity, samples, sizes_by_alpha,
+                   per_q if per_q is not None else pd.DataFrame(columns=["best_hop", "states_expanded", "topic_degree"]),
+                   reference, rho, main_alpha, history)
+    plots.apss_vs_coverage([matched["curve"]], reference, out_dir / "figures")
 
     print(f"\n{BOLD}validity over {n_splits} re-splits{RESET}")
     for a in alphas:
         v = validity[str(a)]
         print(f"  α={a:<4} ECR {v['ecr_mean']:.3f} ± {v['ecr_std']:.3f}  (target {1 - a:.2f}, "
               f"infeasible {v['infeasible_share']:.0%})")
-    print(f"\n{comparison_table(rows, reference, rho)}\n")
+    print(f"\n{comparison_table(rows, reference, rho)}\n\n{matched_table(matched['points'])}\n")
     print(f"{GREEN}saved to {out_dir}: metrics.json, results.csv, results_table.md, validity.json, "
-          f"validity_ecr.npz, per_question.parquet, figures/ ({len(figs)} figures) | {summary['seconds']}s{RESET}")
+          f"validity_ecr.npz, matched.json, per_question.parquet, figures/ ({len(list((out_dir / 'figures').glob('*.png')))} figures) | "
+          f"{summary['seconds']}s{RESET}")
 
 
 def _print_row(r: dict) -> None:

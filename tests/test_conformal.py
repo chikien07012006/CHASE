@@ -36,6 +36,42 @@ def test_split_conformal_coverage_is_valid_and_tight(alpha, n):
     assert 1 - alpha - 4 * se <= hits.mean() <= 1 - alpha + 1 / (n + 1) + 4 * se
 
 
+def _simulate(draw, alpha, n, reps=20000, seed=0):
+    """Fresh cal + test scores each rep: (P(found and not abstained), P(abstain))."""
+    rng = np.random.default_rng(seed)
+    found = abstain = 0
+    for _ in range(reps):
+        s = draw(rng, n + 1)
+        tau = conformal_quantile(s[:-1], alpha)
+        if np.isfinite(tau):
+            found += covered(s[-1:], tau)[0]
+        else:
+            abstain += 1
+    return found / reps, abstain / reps
+
+
+def test_coverage_with_unreachable_questions_and_abstention_rate():
+    # 15% of questions unreachable (score +inf): ties at +inf keep both bounds; abstention = P(Bin(n, rho) < k)
+    from scipy.stats import binom
+    alpha, n, rho, reps = 0.2, 50, 0.85, 20000
+    found, abstain = _simulate(lambda rng, m: np.where(rng.random(m) < rho, rng.random(m), INF), alpha, n, reps)
+    se = 0.5 / math.sqrt(reps)
+    k = math.ceil((n + 1) * (1 - alpha))
+    assert abs(abstain - binom.cdf(k - 1, n, rho)) <= 4 * se
+    assert found >= 1 - alpha - abstain - 4 * se
+    assert found <= min(rho, 1 - alpha + 1 / (n + 1)) + 4 * se
+
+
+def test_finite_ties_keep_the_lower_bound_but_can_break_the_upper_bound():
+    # five distinct score values: the conformal threshold sits on a tie and covers far more than 1 - alpha
+    alpha, n, reps = 0.2, 50, 20000
+    found, abstain = _simulate(lambda rng, m: rng.integers(0, 5, m) / 4, alpha, n, reps)
+    se = 0.5 / math.sqrt(reps)
+    assert abstain == 0
+    assert found >= 1 - alpha - 4 * se
+    assert found > 1 - alpha + 1 / (n + 1) + 4 * se
+
+
 def test_unreachable_questions_never_count_as_covered():
     # 30% of questions cannot reach an answer: asking for 90% must be reported infeasible
     rng = np.random.default_rng(1)

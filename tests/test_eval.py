@@ -67,3 +67,31 @@ def test_all_figures_are_written(tmp_path):
     assert names == ["fig1_validity_hist.png", "fig2_coverage_vs_target.png", "fig3_apss_efficiency.png",
                      "fig4_set_size_distribution.png", "fig5_cost.png", "fig6_training_curves.png"]
     assert all((tmp_path / n.replace(".png", ".pdf")).exists() for n in names)
+
+
+def test_equal_coverage_is_calibrated_on_cal_and_hits_the_target(tmp_path):
+    from chase.eval.compare import equal_coverage_table, same_alpha_table
+    from chase.eval.freebase import matched_coverage, matched_table
+    rng = np.random.default_rng(2)
+    cal = [_rec(x, sizes=rng.random(20)) for x in rng.random(300)]
+    test = [_rec(x, sizes=rng.random(20)) for x in rng.random(900)]
+    reference = reference_for("webqsp")
+    m = matched_coverage(cal, test, reference, n_splits=200)
+    assert len(m["points"]) == sum(len(t) for t in reference.values())
+    for p in m["points"]:
+        assert abs(p["alpha"] - (1 - p["ref_ecr"])) < 1e-9
+        assert abs(p["resplit"]["ecr_mean"] - p["ref_ecr"]) < 0.01          # exact coverage on average
+        tau = metrics_at(cal, test, p["alpha"])["tau"]
+        manual = np.mean([np.searchsorted(t.sorted_sigma, tau, side="right") for t in test])
+        assert abs(p["official"]["apss"] - manual) < 1e-12
+    curve = m["curve"]
+    assert all(c["apss_mean"] >= d["apss_mean"] for c, d in zip(curve, curve[1:]))   # larger alpha, smaller sets
+    assert "APSS ratio" in matched_table(m["points"])
+    validity, _ = validity_resplits(cal, test, [0.3, 0.5], n_splits=200)
+    metrics = [{"rows": [metrics_at(cal, test, a) for a in (0.3, 0.5)]}] * 2
+    assert "CPR (reported)" in same_alpha_table(metrics, [validity, validity], reference)
+    assert "APSS ratio" in equal_coverage_table([m, m])
+    plots._style()
+    plots.apss_vs_alpha([validity, validity], reference, tmp_path)
+    plots.apss_vs_coverage([curve, curve], reference, tmp_path)
+    assert (tmp_path / "fig_same_alpha.png").exists() and (tmp_path / "fig7_apss_vs_coverage.png").exists()

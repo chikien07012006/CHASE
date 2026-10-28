@@ -97,3 +97,21 @@ def test_select_gold_keeps_patterns_close_to_the_best():
     assert [r for _, r, _ in select_gold(paths, q, rel_emb, delta=0.01)] == [(1, 2)]
     assert len(select_gold(paths * 50, q, rel_emb, delta=1.0, max_paths=64)) == 64
     assert select_gold([], q, rel_emb) == []
+
+
+def test_cal_from_validation_uses_all_of_validation_and_holds_out_train_groups_for_early_stopping(tmp_path):
+    rng = np.random.default_rng(1)
+    train_qids = [f"WebQTrn-{g}_{j}" for g in range(300) for j in range(rng.integers(1, 15))]
+    for store, q in {"train": train_qids, "validation": ["v"] * 40, "test": ["t"] * 7}.items():
+        (tmp_path / store).mkdir()
+        pd.DataFrame({"qid": q}).to_parquet(tmp_path / store / "questions.parquet")
+    s = make_freebase_splits(tmp_path, cal_fraction=0.1, seed=0, cal_from="validation")
+    assert s["cal"] == {"store": "validation", "indices": list(range(40))}
+    assert s["train"]["store"] == s["val"]["store"] == "train"
+    # same train / held-out partition as the CPR protocol, with the held-out part used for early stopping
+    assert s["val"]["indices"] == make_freebase_splits(tmp_path, cal_fraction=0.1, seed=0)["cal"]["indices"]
+    prefix = lambda idx: {train_qids[i].split("_")[0] for i in idx}
+    assert not prefix(s["train"]["indices"]) & prefix(s["val"]["indices"])
+    assert len(s["test"]["indices"]) == 7
+    with pytest.raises(ValueError):
+        make_freebase_splits(tmp_path, cal_from="test")

@@ -203,6 +203,54 @@ def training_curves(history: dict, alpha: float, out: Path) -> None:
     _save(fig, out, "fig6_training_curves")
 
 
+def _seed_band(ax, x, ys: np.ndarray, label: str) -> None:
+    """Mean line over seeds (rows of ys), min–max band when there is more than one seed."""
+    c = METHOD_COLOUR["CHASE"]
+    ax.plot(x, np.nanmean(ys, axis=0), "o-", color=c, ms=3.5,
+            label=label + (f", mean of {len(ys)} seeds" if len(ys) > 1 else ""))
+    if len(ys) > 1:
+        ax.fill_between(x, np.nanmin(ys, axis=0), np.nanmax(ys, axis=0), color=c, alpha=0.15, lw=0,
+                        label="CHASE seed range")
+
+
+def apss_vs_alpha(validities: list[dict], reference: dict, out: Path, name: str = "fig_same_alpha") -> None:
+    """Same alpha: APSS against alpha. CHASE = mean APSS over the 1000 re-splits, one validity.json per seed."""
+    out.mkdir(parents=True, exist_ok=True)
+    alphas = sorted(float(a) for a in validities[0] if np.isfinite(validities[0][a].get("apss_mean", np.nan)))
+    fig, ax = plt.subplots(figsize=(5.6, 3.8))
+    for nm, table in reference.items():
+        a = sorted(table)
+        ax.plot(a, [table[x][1] for x in a], "o-", color=METHOD_COLOUR.get(nm, INK_2), label=f"{nm} (reported)")
+    _seed_band(ax, alphas, np.array([[v[str(a)]["apss_mean"] for a in alphas] for v in validities]),
+               "CHASE (re-split mean)")
+    ax.set_yscale("log")
+    ax.set_xlabel("α")
+    ax.set_ylabel("APSS (log)")
+    ax.set_title("APSS at the same α (lower is better)")
+    ax.legend(fontsize=8)
+    _save(fig, out, name)
+
+
+def apss_vs_coverage(curves: list[list[dict]], reference: dict, out: Path, name: str = "fig7_apss_vs_coverage") -> None:
+    """Equal coverage: APSS against coverage. CHASE is calibrated on cal at each target 1 - alpha and averaged
+    over the re-splits (mean ECR = target), one curve per seed; other methods are their reported points."""
+    out.mkdir(parents=True, exist_ok=True)
+    keep = [i for i, p in enumerate(curves[0]) if all(np.isfinite(c[i]["apss_mean"]) for c in curves)]
+    x = 100 * np.mean([[c[i]["ecr_mean"] for i in keep] for c in curves], axis=0)
+    fig, ax = plt.subplots(figsize=(5.6, 3.8))
+    _seed_band(ax, x, np.array([[c[i]["apss_mean"] for i in keep] for c in curves]), "CHASE (re-split mean)")
+    for nm, table in reference.items():
+        pts = sorted(table.values())
+        ax.plot([p[0] for p in pts], [p[1] for p in pts], "o--", color=METHOD_COLOUR.get(nm, INK_2), lw=1,
+                label=f"{nm} (reported)")
+    ax.set_yscale("log")
+    ax.set_xlabel("coverage, ECR (%)")
+    ax.set_ylabel("APSS (log)")
+    ax.set_title("APSS at equal coverage (lower is better)")
+    ax.legend(fontsize=8)
+    _save(fig, out, name)
+
+
 def make_all(out: Path, rows, validity, ecr_samples, sizes, per_q, reference, rho, main_alpha, history=None) -> list[str]:
     _style()
     out.mkdir(parents=True, exist_ok=True)
