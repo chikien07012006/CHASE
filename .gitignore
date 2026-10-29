@@ -1,5 +1,5 @@
 # Data: keep raw and processed datasets out of Git; document download/build steps in README.
-data/
+/data/
 datasets/
 models/
 

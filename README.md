@@ -8,20 +8,20 @@
 
 ![status](https://img.shields.io/badge/status-research%20in%20progress-2a78d6)
 ![python](https://img.shields.io/badge/python-3.11-52514e)
-![tests](https://img.shields.io/badge/tests-148%20passing-1baf7a)
+![tests](https://img.shields.io/badge/tests-164%20passing-1baf7a)
 ![llm](https://img.shields.io/badge/LLM%20calls-0-52514e)
 
 </div>
 
-> **Status (17 Oct 2026).** The full pipeline (graphs → scorer → bottleneck DP → conformal calibration → two-stage training → official evaluation) is implemented and tested. First results on **WebQSP** are below (single seed). CWQ, BioHopR, same-scorer baselines and multi-seed runs are in progress.
+> **Status (29 Oct 2026).** The full pipeline (graphs → scorer → bottleneck DP → conformal calibration → two-stage training → official evaluation) is implemented and tested. Results on **WebQSP** and **CWQ** are below, with 3 seeds each. Same-scorer baselines and BioHopR are in progress.
 
 ---
 
 ## Highlights
 
 - **Exact coverage.** Over 1000 random calibration/test re-splits, empirical coverage matches the split-conformal theory to three decimals at every α (e.g. 0.902 vs 0.901 at α = 0.1). CPR over-covers by 7–31 points, i.e. it is conservative.
-- **Reaches the high-coverage regime.** CHASE certifies α = 0.1 and 0.2 on WebQSP (ECR 87.9% / 77.0%). Neither CPR nor UaG reports these levels.
-- **Smaller sets where it matters.** At matched coverage ≥ 65%, CHASE returns **16–29% fewer answers than CPR** and **3–11× fewer than UaG**.
+- **Reaches the high-coverage regime.** CHASE certifies α = 0.1 and 0.2 on WebQSP (ECR 87.6% / 78.2%) and α = 0.2 on CWQ (79.5%). Neither CPR nor UaG reports these levels.
+- **Smaller sets at equal coverage.** Compared with CPR, CHASE returns 13–33% fewer answers on WebQSP at coverage ≥ 61%, and 12–55% fewer on CWQ at coverage ≤ 68%. Compared with UaG, it returns up to 10× fewer answers on WebQSP and 25–50× fewer on CWQ.
 - **Cheap and adaptive.** 6.4 ms per question on a single CPU thread with no LLM. Pruning expands ~48 states per question at α = 0.1 vs 462 without pruning.
 - **Conformal training works.** Optimising a differentiable set-size loss cuts validation APSS by 38.7% over BCE-only training.
 
@@ -63,32 +63,46 @@ question + topic entities ─► state-based scorer ─► bottleneck DP, pruned
 5. **Two-stage training.** Stage 1 trains a BCE loss on steps and stops, with labels from filtered gold paths. Stage 2 extends ConfTr to graph search: a soft bottleneck DP plus a differentiable quantile on half a batch, minimising the soft number of *wrong* answers returned on the other half.
 6. **Type feasibility (typed KGs)** and **conformal risk control** for multi-answer recall are implemented for the biomedical benchmark.
 
-Full method, proofs and experiment plan: [`proposal_chase.tex`](proposal_chase.tex). Weekly report with the full analysis: [`reports/2026-10-17_weekly_report.md`](reports/2026-10-17_weekly_report.md).
+Full method and proofs: [`proposal_chase.tex`](proposal_chase.tex). The coverage theorem with unreachable questions, abstention, ties and multi-answer targets: [`theory.tex`](theory.tex).
 
 ## Results
 
-**WebQSP**, official split (283 calibration / 1,628 test, same sizes as CPR), H = 2, single seed. ECR (%) / APSS (average number of answer entities). CPR and UaG numbers are as reported in the CPR paper; "—" = not reported.
+Official test splits, H = 2, 3 seeds. Mean ± std over seeds. CPR and UaG numbers are as reported in the CPR paper; they use a different scorer, retrieval and split.
 
-| Method | α=0.05 | α=0.1 | α=0.2 | α=0.3 | α=0.4 | α=0.5 | α=0.6 | α=0.7 | α=0.8 |
+- **WebQSP:** cal is 283 questions drawn from train, test is 1,628 questions (same sizes as CPR).
+- **CWQ:** cal is the official validation set (3,519 questions), test is 3,531 questions. A cal drawn from train under-covered on test; see [`docs/cwq_results.md`](docs/cwq_results.md).
+
+**Coverage.** ECR (%) on the official split. "abstain" means fewer than k cal questions are reachable, so τ̂ = ∞.
+
+| α | 0.05 | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 | 0.6 | 0.7 | 0.8 |
 |---|---|---|---|---|---|---|---|---|---|
-| target 1−α | 95 | 90 | 80 | 70 | 60 | 50 | 40 | 30 | 20 |
-| UaG | — | — | — | 72.3 / 98.81 | 60.4 / 32.52 | 51.8 / 14.29 | 41.8 / 8.23 | 37.4 / 5.58 | 25.6 / 1.67 |
-| CPR | — | — | — | 76.8 / 17.77 | 67.3 / 10.10 | 61.4 / 7.14 | 58.3 / 5.45 | 55.1 / 3.01 | 50.8 / 1.62 |
-| **CHASE** | 91.4 / 62.97† | **87.9 / 31.67** | **77.0 / 12.77** | 68.4 / 8.79 | 57.6 / 6.01 | 50.3 / 4.63 | 43.7 / 3.57 | 33.2 / 2.56 | 19.9 / 1.32 |
+| target | 95 | 90 | 80 | 70 | 60 | 50 | 40 | 30 | 20 |
+| WebQSP | 92.7 ± 0.3 | 87.6 ± 0.4 | 78.2 ± 1.5 | 68.5 ± 1.7 | 60.5 ± 0.9 | 49.2 ± 1.1 | 39.1 ± 0.9 | 28.7 ± 1.8 | 18.2 ± 2.2 |
+| CWQ | abstain | abstain | 79.5 ± 0.3 | 69.0 ± 0.5 | 60.1 ± 0.9 | 50.6 ± 0.3 | 40.6 ± 0.4 | 29.5 ± 0.4 | 18.7 ± 0.9 |
 
-† α = 0.05 is at the reachability ceiling (ρ₂ = 95.33%); 40% of re-splits return τ̂ = ∞.
+- Over 1,000 cal/test re-splits, the mean ECR equals 1 − α at every feasible level.
+- On CWQ, 20 of 21 seed × α cells fall inside the theory 95% interval.
+- CPR over-covers by 7–31 points, so comparing set sizes at the same α favours CHASE.
 
-**Matched coverage.** CPR over-covers, so comparing at equal α favours it. Comparing at equal ECR, with CHASE interpolated:
+**Equal coverage.** CHASE is calibrated on cal at 1 − α′ = the other method's reported ECR. The table gives CHASE APSS ÷ the other method's APSS, so a value below 1 means CHASE returns smaller sets. CHASE APSS is the mean over 1,000 re-splits.
 
-| CPR ECR | 76.8% | 67.3% | 61.4% | 58.3% | 55.1% | 50.8% |
+| WebQSP coverage % | 76.8 | 67.3 | 61.4 | 58.3 | 55.1 | 50.8 |
 |---|---|---|---|---|---|---|
-| CPR APSS | 17.77 | 10.10 | 7.14 | 5.45 | 3.01 | 1.62 |
-| CHASE APSS | **12.7** | **8.5** | 6.9 | 6.2 | 5.5 | 4.7 |
+| vs CPR | **0.67** | **0.76** | **0.87** | 1.03 | 1.70 | 2.76 |
 
-CHASE wins in the high-coverage regime. CPR wins below ~60% coverage, where a single global threshold leaves many CHASE sets empty (33% at α = 0.5) while others stay large.
+| CWQ coverage % | 76.6 | 68.1 | 58.8 | 50.2 | 42.8 | 29.9 |
+|---|---|---|---|---|---|---|
+| vs CPR | 1.83 | **0.88** | **0.60** | **0.52** | **0.48** | **0.45** |
+
+- **vs UaG:** the ratio is 0.10–0.97 on WebQSP and 0.02–0.04 on CWQ.
+- **Where CHASE loses:**
+  - Near CWQ's reachability ceiling (about 0.80).
+  - At low coverage on WebQSP, where one global threshold leaves many sets empty (34% at 51% coverage) while others stay large.
+- **Full tables:** `runs/{webqsp,cwq}_compare/compare.md`, produced by `chase.eval.compare`.
 
 <p align="center">
-  <img src="docs/figures/fig3_apss_efficiency.png" width="90%" alt="APSS and coverage efficiency vs alpha">
+  <img src="docs/figures/webqsp_equal_coverage.png" width="48%" alt="WebQSP: APSS vs coverage">
+  <img src="docs/figures/cwq_equal_coverage.png" width="48%" alt="CWQ: APSS vs coverage">
 </p>
 
 <p align="center">
@@ -107,7 +121,7 @@ CHASE wins in the high-coverage regime. CPR wins below ~60% coverage, where a si
 | CWQ (RoG) | Freebase, one subgraph per question | Direct comparison, compositional | 3,531 | 80.66% | 43.95% | **80.12%** |
 | BioHopR | Full PrimeKG (134k nodes, 4.1M edges) | Biomedical, multi-answer (36.65 answers / question) | own split | — | — | — |
 
-ρ_H is the share of questions with a gold answer reachable within H hops: an upper bound on coverage for **every** method. It stops growing at H = 2, because RoG subgraphs are 2-hop neighbourhoods. Full statistics: [`DATA.md`](DATA.md).
+ρ_H is the share of questions with a gold answer reachable within H hops: an upper bound on coverage for **every** method. It stops growing at H = 2, because RoG subgraphs are 2-hop neighbourhoods.
 
 ## Repository layout
 
@@ -119,11 +133,10 @@ chase/
   conformal/   split.py (split CP, CRC) · calibrate.py (calibration scores from the DP)
   data/        splits.py · gold_paths.py (path enumeration + coincidental-path filter)
   train/       losses.py (BCE, soft DP, ConfTr) · sampler.py · train.py · evaluate.py
-  eval/        freebase.py (official evaluation) · plots.py · reference.py (published baselines)
-tests/         148 unit tests
-docs/figures/  figures used in this README
-reports/       weekly reports
-proposal_chase.tex · DATA.md · requirements.txt
+  eval/        freebase.py (official evaluation) · compare.py (multi-seed, same α / equal coverage) · plots.py · reference.py (published baselines)
+tests/         164 unit tests
+docs/          cwq_results.md · figures/ (used in this README)
+proposal_chase.tex · theory.tex · requirements.txt
 ```
 
 ## Setup
@@ -139,7 +152,7 @@ Raw data goes under `data/raw/` (git-ignored): PrimeKG `kg_giant.csv` (Harvard D
 
 ## Reproducing the results
 
-WebQSP end to end (CWQ: replace `webqsp` with `cwq`). Times are for an Apple-silicon laptop, CPU only.
+WebQSP end to end. Times are for an Apple-silicon laptop, CPU only.
 
 ```bash
 D=data/processed/webqsp
@@ -147,12 +160,28 @@ python -m chase.kg.build_freebase --raw data/raw/rog_webqsp --out $D          # 
 python -m chase.model.text_cache freebase $D                                  # MiniLM cache       ~3 min
 python -m chase.data.splits --data $D                                         # train/cal/val/test
 python -m chase.data.gold_paths --data $D --split train --H 2                 # training labels    ~6 s
-python -m chase.train.train --data $D --out runs/webqsp_seed0                 # two-stage training ~10 min
-python -m chase.eval.freebase --data $D --model runs/webqsp_seed0/best.pt \
-                              --out runs/webqsp_seed0/eval                    # evaluation         ~2 min
+for s in 0 1 2; do
+  python -m chase.train.train --data $D --out runs/webqsp_seed$s --seed $s    # two-stage training ~10 min
+  python -m chase.eval.freebase --data $D --model runs/webqsp_seed$s/best.pt \
+                                --out runs/webqsp_seed$s/eval                 # evaluation         ~2 min
+done
+python -m chase.eval.compare --evals runs/webqsp_seed{0,1,2}/eval --out runs/webqsp_compare
 ```
 
-The evaluation writes `results_table.md`, `results.csv`, `metrics.json`, `validity.json` (1000 re-splits), `per_question.parquet` and six figures (PNG + PDF) to the `--out` folder.
+For CWQ, replace `webqsp` with `cwq`, and make two other changes:
+- split with `chase.data.splits --data $D --cal-from validation`;
+- pass `--alpha 0.3` to training and `--main-alpha 0.3 --dataset cwq` to evaluation.
+
+CWQ training takes about 1.5 h per seed.
+
+The evaluation writes these files to the `--out` folder:
+- `results_table.md`, `results.csv` and `metrics.json`;
+- `validity.json`, with 1,000 re-splits;
+- `matched.json`, with the equal-coverage points;
+- `per_question.parquet`;
+- seven figures (PNG + PDF).
+
+`compare` writes `compare.md` and the same-α and equal-coverage figures.
 
 Biomedical graph (PrimeKG):
 
@@ -165,7 +194,7 @@ python -m chase.kg.type_distance --kg data/processed/primekg_full
 ## Testing
 
 ```bash
-python -m pytest tests -q        # 148 tests, ~10 s
+python -m pytest tests -q        # 164 tests, ~10 s
 ```
 
 The key invariants are checked against brute force: the DP's σ equals enumeration of every walk; a pruned search returns exactly the unpruned answer set; the soft DP converges to the hard DP as T → 0; split-conformal and CRC thresholds meet their guarantees in simulation; `bind()` lookup tables equal the full forward pass.
@@ -176,10 +205,11 @@ The key invariants are checked against brute force: the DP's σ equals enumerati
 - [x] State-based scorer, type feasibility, bottleneck DP, reachability ceilings
 - [x] Conformal calibration (split CP, CRC)
 - [x] Gold paths, sampler, two-stage training (BCE + conformal training)
-- [x] Official evaluation, 1000-re-split validity check, figures: **WebQSP**
+- [x] Official evaluation, 1000-re-split validity check, figures: **WebQSP**, **CWQ** (3 seeds each)
+- [x] Same-α and equal-coverage comparison with reported CPR / UaG; theory note
 - [ ] Same-scorer baselines: per-hop (UaG-style), Bonferroni, fixed beam + post-hoc (CPR-style), conformal top-K
 - [ ] Low-coverage regime: richer state (previous relation), non-empty sets
-- [ ] Five seeds, paired bootstrap; CWQ
+- [ ] Paired bootstrap
 - [ ] BioHopR (entity linking, CRC); CPR re-run under identical conditions
 - [ ] Ablations RQ6; paper
 
