@@ -108,7 +108,8 @@ Top-K uses the **same scorer and the same ranking** as CHASE. Only the cut diffe
 
 ### Weaknesses
 
-- **Coverage cannot go below Hit@1.** The most confident candidate always has gap 0 and is always returned, so sets are never empty. When 1 − α is below Hit@1, CHASE returns the top candidate and covers more than the target (like top-K and CPR's fallback).
+- **Coverage cannot go below Hit@1.** The most confident candidate always has gap 0 and is always returned, so a set is empty only when the question has no reachable candidate at all (0% of WebQSP and 0.06% of CWQ test questions). When 1 − α is below Hit@1, CHASE returns the top candidate and covers more than the target (like top-K and CPR's fallback).
+- **Conformal top-K is smaller at mid coverage.** Under the same scorer, a fixed K̂ beats the per-question gap threshold at mid coverage: 1.6–2.1× smaller sets at 66–81% ECR on WebQSP, and 1.06–1.22× at 45–61% on CWQ. CHASE is smaller at high coverage (≥ 90% on WebQSP, 80% on CWQ). The ranking is good, but gaps are not yet fully comparable across questions.
 - **Ties at the top.** The bottleneck score is a maximum of step scores, so several candidates can share σ_min. They are all returned at gap 0.
 - **Capped by reachability.** Coverage above ρ_H, the share of questions with a reachable answer, is impossible. Near the cap the sets grow fast (CWQ, ρ ≈ 0.80). This cap applies to every method, but CHASE reports the cap honestly instead of hiding it.
 - **The guarantee is marginal.** It holds on average over questions, not for each question, and it needs calibration and test questions to be exchangeable.
@@ -124,6 +125,6 @@ Top-K uses the **same scorer and the same ranking** as CHASE. Only the cut diffe
 | Score per question | Best gold path value in the beam | Separate score per step | Rank of the best gold answer | Gap of the best gold answer to the best candidate (g\* = σ\* − σ_min) |
 | Can lose an answer to the search | Yes (beam) | No | No | No |
 | Set size | Adaptive, at most the beam | Adaptive, large | Fixed K̂ | Adaptive |
-| Empty sets | Never (fallback) | Yes | Never | Never |
+| Empty sets | Never (fallback) | Yes | Never | Only with no reachable candidate |
 | Coverage | Over-covers (fallback, whole-beam return) | Adds up per hop, or conservative | ≥ 1 − α, not tight | Exact above Hit@1: 1 − α to 1 − α + 1/(n+1) |
 | Abstains when the level is out of reach | No | Not specified | Yes | Yes |

@@ -29,7 +29,8 @@ def _usable(p: dict) -> bool:
     return np.isfinite(p["apss_mean"]) and p["apss_mean"] > 0 and p["infeasible_share"] == 0
 
 
-PLOTTED = ["Top-K", "CPR-style B=32", "UaG-style Bonferroni"]   # the tables keep every variant
+PLOTTED = ["Top-K", "CPR-style B=32", "UaG-style per-hop", "UaG-style Bonferroni"]   # the tables keep every variant
+INVALID = {"UaG-style per-hop": "no guarantee"}   # drawn dashed: coverage is not controlled, size is a lower bound
 
 
 def equal_coverage_figure(results: list[dict], out: Path, name: str = "fig_baselines_equal_coverage",
@@ -43,14 +44,23 @@ def equal_coverage_figure(results: list[dict], out: Path, name: str = "fig_basel
     plots._seed_band(ax, 100 * np.mean([[c[i]["ecr_mean"] for i in keep] for c in curves], axis=0),
                      np.array([[c[i]["apss_mean"] for i in keep] for c in curves]), "CHASE")
     beams = [int(m.split("B=")[1].split(",")[0]) for m in methods if m.startswith("CPR-style")]
+    missing = []
     for nm in methods:
         if nm not in results[0]["methods"]:
             continue
         rs = [r["methods"][nm]["resplit"] for r in results]
         alphas = [a for a in rs[0] if all(_usable(x[a]) for x in rs)]
+        if not alphas:
+            missing.append(nm)
+            continue
         x = [100 * np.mean([r[a]["ecr_mean"] for r in rs]) for a in alphas]
         y = [np.mean([r[a]["apss_mean"] for r in rs]) for a in alphas]
-        ax.plot(x, y, "o--" if "CPR rule" in nm else "o-", color=_colour(nm, beams), ms=3, lw=1.2, label=nm)
+        label = f"{nm} ({INVALID[nm]})" if nm in INVALID else nm
+        ax.plot(x, y, "o--" if "CPR rule" in nm or nm in INVALID else "o-", color=_colour(nm, beams), ms=3, lw=1.2,
+                label=label)
+    if missing:
+        ax.text(0.02, 0.02, "Not drawn (abstains at every level in some seed): " + ", ".join(missing),
+                transform=ax.transAxes, fontsize=7, color=plots.INK_2)
     ax.set_yscale("log")
     ax.set_xlabel("coverage, ECR (%) — re-split mean, levels with no abstention")
     ax.set_ylabel("APSS (log)")

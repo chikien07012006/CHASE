@@ -62,8 +62,9 @@ Thư mục này trả lời câu hỏi đó. Mọi phương pháp ở đây dùn
 ## Lưu ý khi đọc kết quả
 
 - **Số lần re-split:** 1000 cho CHASE, Top-K và CPR-style; 200 cho UaG-style, vì mỗi lần re-split phải duyệt lại bảng điều kiện của từng câu.
-- **Cùng coverage:** dùng ECR trung bình re-split của baseline làm mục tiêu cho CHASE. Hình chỉ vẽ các mức không có lần re-split nào bị abstain.
-- **CHASE và Top-K không bao giờ cho tập rỗng**, nên coverage tối thiểu của chúng bằng Hit@1. Ở α cao, cả hai sẽ bao phủ dư. Trong bảng cùng coverage, dòng có '(floor)' là baseline có coverage thấp hơn mức sàn của CHASE, nên CHASE phủ nhiều hơn và tỉ lệ APSS không còn so ở cùng coverage.
+- **Cùng coverage:** dùng ECR trung bình re-split của baseline làm mục tiêu cho CHASE. Hình chỉ vẽ các mức không có lần re-split nào bị abstain, ở mọi seed.
+- **UaG trong hình:** bản per-hop được vẽ nét đứt với nhãn "no guarantee", vì nó không kiểm soát coverage và kích thước tập của nó chỉ là cận dưới. Bản Bonferroni trên CWQ abstain ở mọi mức trong ít nhất một seed, nên không vẽ được và hình có dòng chú thích cho việc này.
+- **CHASE và Top-K không cho tập rỗng**, trừ khi câu hỏi không có ứng viên nào đi tới được (0% câu test WebQSP, 0.06% CWQ). Vì vậy coverage tối thiểu của chúng bằng Hit@1. Ở α cao, cả hai sẽ bao phủ dư. Trong bảng cùng coverage, dòng có '(floor)' là baseline có coverage thấp hơn mức sàn của CHASE, nên CHASE phủ nhiều hơn và tỉ lệ APSS không còn so ở cùng coverage.
 - **Chi phí của CHASE** trong bảng là của DP không tỉa. Chi phí khi tỉa thật nằm trong `chase.eval.freebase`.
 
 ## Test

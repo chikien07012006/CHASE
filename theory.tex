@@ -105,7 +105,7 @@ The gap has one systematic tie: $g^*(q)=0$ whenever a gold answer is among the m
 \[
 \Prob(F)\ \ge\ \Prob\big(g^*(q)=0,\ \tauhat<\infty\big),
 \]
-about Hit@1 (sets are never empty). For $1-\alpha$ below this share, $\tauhat=0$, the output is the top candidates, and the coverage exceeds the target: (A3) fails at $0$ and (iii) does not hold. Above it, finite ties occur only for duplicated questions or tied bottleneck values, and (iii) applies. The lower bound (i) holds at every level.
+about Hit@1 (a set is empty only when the question has no reachable candidate at all: 0\% of WebQSP and 0.06\% of CWQ test questions). For $1-\alpha$ below this share, $\tauhat=0$, the output is the top candidates, and the coverage exceeds the target: (A3) fails at $0$ and (iii) does not hold. Above it, finite ties occur only for duplicated questions or tied bottleneck values, and (iii) applies. The lower bound (i) holds at every level.
 \end{remark}
 
 %======================================================================
@@ -169,7 +169,7 @@ Claim & Test (\code{tests/})\\
 \midrule
 DP score $\sigma_v$ is exact & \code{test\_dp.py::test\_sigma\_matches\_brute\_force}: compares with enumeration of every walk on 60 random graphs, with and without answer masks and feasibility filters; step and stop scores are rounded to $0.1$, so many walks tie\\
 Several answers & \code{test\_dp.py::test\_sigma\_star\_is\_min\_over\_many\_answers}: $\sigma^*$ equals the brute-force minimum over gold answers that include masked, unreachable and topic nodes\\
-Pruned search returns the unpruned set & \code{test\_dp.py::test\_pruned\_run\_returns\_same\_answer\_set\_and\_is\_nested}; for the gap threshold, \code{test\_gap\_pruned\_run\_returns\_same\_gap\_set\_and\_sigma\_min} (same $\sigma_{\min}$, same set, never empty); also checked on every real test question (\code{pruned\_matches\_unpruned} in \code{metrics.json})\\
+Pruned search returns the unpruned set & \code{test\_dp.py::test\_pruned\_run\_returns\_same\_answer\_set\_and\_is\_nested}; for the gap threshold, \code{test\_gap\_pruned\_run\_returns\_same\_gap\_set\_and\_sigma\_min} (same $\sigma_{\min}$, same set, never empty when a candidate exists); also checked on every real test question (\code{pruned\_matches\_unpruned} $=$ true in \code{metrics.json} for all 6 runs, WebQSP and CWQ $\times$ 3 seeds)\\
 Edge cases & \code{test\_dp.py::test\_edge\_cases} (no topic, no answer), \code{test\_topic\_is\_never\_an\_answer}\\
 $\tauhat=+\infty$; unreachable $=$ miss & \code{test\_conformal.py::test\_quantile\_infeasible\_levels}, \code{test\_unreachable\_questions\_never\_count\_as\_covered}\\
 Theorem~\ref{thm:cov} (i), (iii) & \code{test\_conformal.py::test\_split\_conformal\_coverage\_is\_valid\_and\_tight} (simulation, continuous scores)\\
