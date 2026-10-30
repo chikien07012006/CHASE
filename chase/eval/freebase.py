@@ -107,6 +107,17 @@ def validity_resplits(cal: list[SigmaRecord], test: list[SigmaRecord], alphas, n
     return summary, samples
 
 
+FLOOR_TOL = 0.01
+
+
+def ratio_cell(apss: float, ref_apss: float, ecr: float, ref_ecr: float) -> str:
+    """APSS ratio; '(floor)' when CHASE cannot go down to the reference coverage (target below Hit@1: the most
+    confident node is always returned), so its coverage is higher and the ratio compares unequal coverage."""
+    if not (np.isfinite(apss) and ref_apss > 0):
+        return "—"
+    return f"{apss / ref_apss:.2f}" + (" (floor)" if ecr > ref_ecr + FLOOR_TOL else "")
+
+
 CURVE_ALPHAS = [round(a, 2) for a in np.arange(0.02, 0.86, 0.01)]
 
 
@@ -139,9 +150,9 @@ def matched_table(points: list[dict]) -> str:
              "|---|---|---|---|---|---|---|---|"]
     for p in points:
         r = p["resplit"]
-        ratio = r["apss_mean"] / p["ref_apss"] if np.isfinite(r["apss_mean"]) else float("nan")
         lines.append(f"| {p['method']} (reported) | {p['ref_alpha']} | {100 * p['ref_ecr']:.1f} | {p['ref_apss']:.2f} | "
-                     f"{p['alpha']:.3f} | {100 * r['ecr_mean']:.1f} | {r['apss_mean']:.2f} | {ratio:.2f} |")
+                     f"{p['alpha']:.3f} | {100 * r['ecr_mean']:.1f} | {r['apss_mean']:.2f} | "
+                     f"{ratio_cell(r['apss_mean'], p['ref_apss'], r['ecr_mean'], p['ref_ecr'])} |")
     return "\n".join(lines)
 
 

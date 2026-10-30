@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from chase.eval import plots
+from chase.eval.freebase import ratio_cell
 from chase.eval.reference import reference_for
 
 
@@ -41,7 +42,8 @@ def same_alpha_table(metrics: list[dict], validities: list[dict], reference: dic
 
 def equal_coverage_table(matched: list[dict]) -> str:
     lines = ["**Equal coverage**: CHASE calibrated on cal at target 1 − α' = the other method's reported ECR; "
-             "CHASE numbers are means over 1000 re-splits (then mean ± std over seeds).", "",
+             "CHASE numbers are means over 1000 re-splits (then mean ± std over seeds). '(floor)': the target is "
+             "below CHASE's Hit@1 floor, so CHASE covers more than the other method.", "",
              "| Method | α | ECR % | APSS | CHASE α' | CHASE ECR % | CHASE APSS | CHASE empty % | APSS ratio |",
              "|---|---|---|---|---|---|---|---|---|"]
     for i, p in enumerate(matched[0]["points"]):
@@ -49,7 +51,8 @@ def equal_coverage_table(matched: list[dict]) -> str:
         apss = [x["apss_mean"] for x in r]
         lines.append(f"| {p['method']} (reported) | {p['ref_alpha']} | {100 * p['ref_ecr']:.1f} | {p['ref_apss']:.2f} | "
                      f"{p['alpha']:.3f} | {_ms([100 * x['ecr_mean'] for x in r], '{:.1f}')} | {_ms(apss)} | "
-                     f"{_ms([100 * x['empty_mean'] for x in r], '{:.1f}')} | {np.mean(apss) / p['ref_apss']:.2f} |")
+                     f"{_ms([100 * x['empty_mean'] for x in r], '{:.1f}')} | "
+                     f"{ratio_cell(np.mean(apss), p['ref_apss'], np.mean([x['ecr_mean'] for x in r]), p['ref_ecr'])} |")
     return "\n".join(lines)
 
 

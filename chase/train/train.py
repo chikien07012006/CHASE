@@ -39,6 +39,7 @@ class TrainConfig:
     lam: float = 1.0                 # stop-score weight in sigma
     grad_clip: float = 1.0
     seed: int = 0
+    init_stage1: str = ""            # stage-1 checkpoint to start from; stage 1 is then skipped
 
 
 def _bce(scorer: StateScorer, b: Batch, beta: float) -> torch.Tensor:
@@ -79,7 +80,10 @@ def _better(m: dict, best: dict | None) -> bool:
 
 
 def train(cfg: TrainConfig, sampler: Sampler, val, scorer: StateScorer, out_dir: str | Path) -> dict:
-    """Stage 1 (BCE), then stage 2 (soft set size + mu * BCE) from the best stage-1 weights.
+    """Stage 1 (BCE), then stage 2 (soft gap set size + mu * BCE) from the best stage-1 weights.
+
+    cfg.init_stage1: load these stage-1 weights instead of running stage 1 (they are re-validated and saved
+    as stage1_best.pt in out_dir).
 
     val = (store, features, indices): model selection by two-fold APSS at cfg.alpha with the hard DP.
     Saves stage1_best.pt, stage2_best.pt, best.pt and history.json in out_dir.
@@ -141,7 +145,15 @@ def train(cfg: TrainConfig, sampler: Sampler, val, scorer: StateScorer, out_dir:
                 break
         return best
 
-    best1 = run_stage(1, cfg.stage1_epochs, cfg.lr1)
+    if cfg.init_stage1:
+        init = torch.load(cfg.init_stage1)
+        scorer.load_state_dict(init["state_dict"])
+        best1 = {**_validate(scorer, val, cfg), "epoch": init["val"]["epoch"], "init": cfg.init_stage1}
+        save_checkpoint(out / "stage1_best.pt", scorer, cfg, best1)
+        tqdm.write(f"{BOLD}{CYAN}== stage 1 loaded from {cfg.init_stage1} | val APSS {best1['apss']:.2f} "
+                   f"ECR {best1['ecr']:.3f} =={RESET}")
+    else:
+        best1 = run_stage(1, cfg.stage1_epochs, cfg.lr1)
     history["stage1_best"] = best1
     best2 = None
     if cfg.stage2_epochs:

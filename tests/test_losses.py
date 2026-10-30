@@ -7,8 +7,8 @@ from chase.kg.graph import KG, build_csr
 from chase.model.features import GraphFeatures
 from chase.model.scorer import ScorerConfig, StateScorer
 from chase.search.dp import bottleneck_dp
-from chase.train.losses import (BIG, UNREACHABLE, alpha_eff, bce_loss, conftr_size_loss, smooth_max, smooth_min,
-                                soft_bottleneck_dp, soft_wrong_set_size, stage2_loss)
+from chase.train.losses import (BIG, UNREACHABLE, alpha_eff, bce_loss, conftr_size_loss, sigma_min, smooth_max,
+                                smooth_min, soft_bottleneck_dp, soft_gap_star, soft_wrong_set_size, stage2_loss)
 
 N, R, H = 25, 3, 3
 
@@ -106,13 +106,25 @@ def test_alpha_eff():
         alpha_eff(0.1, 0.8)                     # 90% overall is impossible when only 80% is reachable
 
 
-def test_wrong_set_size_ignores_gold_answers():
-    sigma = torch.tensor([0.1, 0.2, 0.9, BIG])
+def test_wrong_set_size_counts_wrong_candidates_by_gap():
+    sigma = torch.tensor([0.3, 0.1, 0.4, 0.9, BIG])   # sigma_min = 0.1 (node 1, wrong)
     gold = torch.tensor([0])
-    base = soft_wrong_set_size(sigma, gold, torch.tensor(0.5), 0.1)
-    moved = soft_wrong_set_size(torch.tensor([0.9, 0.2, 0.9, BIG]), gold, torch.tensor(0.5), 0.1)
-    assert torch.isclose(base, moved)           # moving the gold answer does not change the penalty
-    assert 0.9 < base.item() < 1.1              # node 1 counts ~1, node 2 ~0, node 3 (unreachable) 0
+    base = soft_wrong_set_size(sigma, gold, torch.tensor(0.3), 0.1)
+    moved = soft_wrong_set_size(torch.tensor([0.8, 0.1, 0.4, 0.9, BIG]), gold, torch.tensor(0.3), 0.1)
+    assert torch.isclose(base, moved)           # moving a gold answer that is not the minimum changes nothing
+    assert 1.4 < base.item() < 1.5              # gaps 0, 0.3, 0.8 count 0.95, 0.5, 0.01; unreachable node 0
+    assert sigma_min(torch.full((3,), BIG)) == 0 and soft_wrong_set_size(torch.full((3,), BIG), gold, torch.tensor(0.3), 0.1) == 0
+
+
+def test_gap_loss_ignores_a_shift_of_one_question():
+    torch.manual_seed(1)
+    sigmas = [torch.rand(20) for _ in range(6)]
+    golds = [torch.tensor([i]) for i in range(6)]
+    shifted = [s + 0.37 * (i % 2) for i, s in enumerate(sigmas)]       # the absolute score level of a question
+    a = conftr_size_loss(sigmas, golds, [0, 1, 2], [3, 4, 5], alpha_train=0.3)
+    b = conftr_size_loss(shifted, golds, [0, 1, 2], [3, 4, 5], alpha_train=0.3)
+    assert torch.allclose(a[0], b[0]) and torch.allclose(a[1], b[1])
+    assert soft_gap_star(torch.tensor([0.2, 0.5, 0.7]), torch.tensor([1]), 1e-3).item() == pytest.approx(0.3, abs=1e-3)
 
 
 def test_conftr_loss_gradients_push_the_right_way():
@@ -123,11 +135,15 @@ def test_conftr_loss_gradients_push_the_right_way():
     loss, tau = conftr_size_loss(sigmas, golds, half1, half2, alpha_train=0.25)
     stage2_loss(loss, torch.zeros(()), mu=0.5).backward()
     assert torch.isfinite(tau) and loss.item() > 0
-    for i in half2:                              # wrong nodes are pushed up (gradient of loss < 0 means raise sigma)
+    for i in half2:                              # wrong nodes are pushed away from the best node (raise their sigma)
         g = sigmas[i].grad.clone()
+        top = int(sigmas[i].argmin())
         g[golds[i]] = 0
+        g[top] = 0
         assert (g <= 0).all()
-        assert sigmas[i].grad[golds[i]].item() == 0
+        assert sigmas[i].grad[top].item() >= 0
+        if top != int(golds[i]):
+            assert sigmas[i].grad[golds[i]].item() == 0
     assert sum(sigmas[i].grad[golds[i]].item() for i in half1) > 0   # gold answers in half1 are pushed down via tau
 
 

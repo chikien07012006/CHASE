@@ -96,23 +96,36 @@ def is_reachable(sigma: torch.Tensor, gold: torch.Tensor) -> bool:
     return bool(gold.numel()) and bool((sigma[gold] < UNREACHABLE).any())
 
 
+def sigma_min(sigma: torch.Tensor) -> torch.Tensor:
+    """sigma of the most confident candidate (hard min: a smooth min over hundreds of nodes would sit up to
+    T log n below it). 0 if the question has no candidate."""
+    cand = sigma < UNREACHABLE
+    return sigma[cand].min() if cand.any() else sigma.new_zeros(())
+
+
+def soft_gap_star(sigma: torch.Tensor, gold: torch.Tensor, T: float) -> torch.Tensor:
+    """Gap score of one question: g* = sigma* - sigma_min."""
+    return soft_sigma_star(sigma, gold, T) - sigma_min(sigma)
+
+
 def soft_wrong_set_size(sigma: torch.Tensor, gold: torch.Tensor, tau: torch.Tensor, T_c: float) -> torch.Tensor:
-    """Soft count of non-gold nodes returned at threshold tau: sum of sigmoid((tau - sigma_v) / T_c)."""
-    wrong = torch.ones_like(sigma, dtype=torch.bool)
+    """Soft count of non-gold candidates returned at gap threshold tau: sum of sigmoid((tau - g_v) / T_c),
+    g_v = sigma_v - sigma_min."""
+    wrong = sigma < UNREACHABLE
     wrong[gold] = False
-    return torch.sigmoid((tau - sigma[wrong]) / T_c).sum()
+    return torch.sigmoid((tau - (sigma[wrong] - sigma_min(sigma))) / T_c).sum()
 
 
 def conftr_size_loss(sigmas: list[torch.Tensor], golds: list[torch.Tensor], half1: list[int], half2: list[int],
                      alpha_train: float, T: float = 0.1, T_c: float = 0.1) -> tuple[torch.Tensor, torch.Tensor]:
-    """Stage 2 size term (option A).
+    """Stage 2 size term on the gap score.
 
-    half1: questions used to place the batch threshold; unreachable ones are skipped and alpha_train
+    half1: questions used to place the batch threshold on g*; unreachable ones are skipped and alpha_train
            should be alpha_eff(alpha, rho_train). half2: questions whose wrong answers are penalised;
            unreachable ones are kept (every returned node is wrong there).
     Returns (L_size, tau_B).
     """
-    stars = [soft_sigma_star(sigmas[i], golds[i], T) for i in half1 if is_reachable(sigmas[i], golds[i])]
+    stars = [soft_gap_star(sigmas[i], golds[i], T) for i in half1 if is_reachable(sigmas[i], golds[i])]
     if not stars or not half2:
         zero = sigmas[0].new_zeros(())
         return zero, zero

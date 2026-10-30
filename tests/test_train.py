@@ -77,3 +77,18 @@ def test_train_runs_both_stages_and_saves_checkpoints(tmp_path):
     restored = load_scorer(tmp_path / "best.pt")
     for a, b in zip(restored.state_dict().values(), torch.load(tmp_path / "best.pt")["state_dict"].values()):
         assert torch.equal(a, b)
+
+
+def test_init_stage1_skips_stage1_and_starts_stage2_from_it(tmp_path):
+    n = 10
+    gold = pd.DataFrame({"q_index": list(range(8)), "nodes": [[0, 1, 3]] * 8, "rels": [[1, 2]] * 8})
+    sampler = Sampler(_Store(n), _Features(), gold, indices=range(n), H=2, k_easy=4)
+    val = (_Store(n), _Features(), list(range(n)))
+    new = lambda: StateScorer(ScorerConfig(q_dim=4, rel_dim=5, node_dim=7, hidden=16, proj=8))
+    train(TrainConfig(alpha=0.3, stage1_epochs=1, stage2_epochs=0, batch1=4), sampler, val, new(), tmp_path / "a")
+    cfg = TrainConfig(alpha=0.3, stage2_epochs=1, batch2=6, init_stage1=str(tmp_path / "a" / "stage1_best.pt"))
+    history = train(cfg, sampler, val, new(), tmp_path / "b")
+    assert [e["stage"] for e in history["epochs"]] == [2]
+    for a, b in zip(torch.load(tmp_path / "a" / "stage1_best.pt")["state_dict"].values(),
+                    torch.load(tmp_path / "b" / "stage1_best.pt")["state_dict"].values()):
+        assert torch.equal(a, b)

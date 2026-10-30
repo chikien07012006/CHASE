@@ -138,3 +138,16 @@ def test_zero_scorer_is_reachability():
             frontier = {int(v) for u in frontier for v in kg.neighbors(u)[0]}
             seen_within |= target in frontier
         assert reachable_within(res, [target], H) == seen_within
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_gap_pruned_run_returns_same_gap_set_and_sigma_min(seed):
+    kg, scorer, topic, mask, feasible = _case(seed, with_mask=True, with_feasible=True)
+    full = bottleneck_dp(kg, topic, scorer, H, lam=0.8, answer_mask=mask, feasible=feasible)
+    for gap in np.round(np.arange(0.0, 1.05, 0.1), 1):
+        pruned = bottleneck_dp(kg, topic, scorer, H, gap_tau=gap, lam=0.8, answer_mask=mask, feasible=feasible)
+        assert pruned.sigma_min == full.sigma_min
+        assert set(pruned.gap_answer_set(gap).tolist()) == set(full.gap_answer_set(gap).tolist())
+        assert pruned.edges_scored <= full.edges_scored
+        if np.isfinite(full.sigma_min):
+            assert full.gap_answer_set(gap).size >= 1          # the most confident node always has gap 0

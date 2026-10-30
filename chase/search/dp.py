@@ -46,6 +46,15 @@ class DPResult:
         nodes = np.flatnonzero(self.sigma <= tau)
         return nodes[np.argsort(self.sigma[nodes], kind="stable")]
 
+    @property
+    def sigma_min(self) -> float:
+        """sigma of the most confident node (INF if none is returned at any threshold)."""
+        return float(self.sigma.min())
+
+    def gap_answer_set(self, gap_tau: float) -> np.ndarray:
+        """Nodes whose gap sigma_v - sigma_min is <= gap_tau, most confident first."""
+        return self.answer_set(self.sigma_min + gap_tau)
+
     def sigma_star(self, answers) -> float:
         """Nonconformity score of a question: smallest threshold at which any gold answer is returned."""
         answers = np.asarray(answers, dtype=np.int64)
@@ -66,8 +75,8 @@ class DPResult:
         return steps[::-1]
 
 
-def bottleneck_dp(kg: KG, topic, scorer: ScoreFn, H: int, *, tau: float = INF, lam: float = 1.0,
-                  answer_mask: np.ndarray | None = None,
+def bottleneck_dp(kg: KG, topic, scorer: ScoreFn, H: int, *, tau: float = INF, gap_tau: float = INF,
+                  lam: float = 1.0, answer_mask: np.ndarray | None = None,
                   feasible: Callable[[int, np.ndarray], np.ndarray] | None = None,
                   keep_paths: bool = False) -> DPResult:
     """b_h(v) = min over edges (u -r-> v) of max(b_{h-1}(u), s_h(q, r, v)), over walks.
@@ -75,6 +84,9 @@ def bottleneck_dp(kg: KG, topic, scorer: ScoreFn, H: int, *, tau: float = INF, l
     tau = INF (calibration): no pruning; sigma is exact for every node.
     tau < INF (test): steps scoring above tau are pruned. answer_set(tau) is identical to the
     unpruned run (sigma is exact wherever sigma <= tau); only the cost changes.
+    gap_tau < INF (test, gap score g_v = sigma_v - sigma_min): hop h is pruned at U + gap_tau, where U is
+    the best candidate sigma found at hops < h. U >= sigma_min, so every node with g_v <= gap_tau keeps its
+    best walk: sigma_min and gap_answer_set(gap_tau) are those of the unpruned run.
 
     answer_mask: nodes allowed as answers (e.g. not CVT, right answer type). Topic entities
     are never answers, and answers need at least one hop.
@@ -87,10 +99,15 @@ def bottleneck_dp(kg: KG, topic, scorer: ScoreFn, H: int, *, tau: float = INF, l
     topic = np.unique(np.asarray(topic, dtype=np.int64))
     b[0, topic] = -INF
     states_expanded = edges_scored = 0
+    answerable = np.ones(N, dtype=bool) if answer_mask is None else answer_mask.astype(bool).copy()
+    answerable[topic] = False
+    cand = np.full((H + 1, N), INF)
+    best_cand = INF
 
     for h in range(1, H + 1):
+        t = min(tau, best_cand + gap_tau)
         prev = b[h - 1]
-        frontier = np.flatnonzero((prev < INF) & (prev <= tau))
+        frontier = np.flatnonzero((prev < INF) & (prev <= t))
         if frontier.size == 0:
             break
         states_expanded += frontier.size
@@ -102,7 +119,7 @@ def bottleneck_dp(kg: KG, topic, scorer: ScoreFn, H: int, *, tau: float = INF, l
             continue
         edges_scored += dst.size
         val = np.maximum(prev[src], scorer.edge_score(h, src, rel, dst))
-        keep = val <= tau
+        keep = val <= t
         src, dst, rel, val = src[keep], dst[keep], rel[keep], val[keep]
         if dst.size == 0:
             continue
@@ -116,14 +133,11 @@ def bottleneck_dp(kg: KG, topic, scorer: ScoreFn, H: int, *, tau: float = INF, l
         if keep_paths:
             pred_node[h, dst[best]] = src[best]
             pred_rel[h, dst[best]] = rel[best]
-
-    answerable = np.ones(N, dtype=bool) if answer_mask is None else answer_mask.astype(bool).copy()
-    answerable[topic] = False
-    cand = np.full((H + 1, N), INF)
-    for h in range(1, H + 1):
         reached = np.flatnonzero((b[h] < INF) & answerable)
         if reached.size:
             cand[h, reached] = np.maximum(b[h, reached], lam * scorer.stop_score(h, reached))
+            best_cand = min(best_cand, float(cand[h].min()))
+
     sigma = cand.min(axis=0)
     best_hop = np.where(np.isfinite(sigma), cand.argmin(axis=0), -1).astype(np.int8)
     return DPResult(b=b, cand=cand, sigma=sigma, best_hop=best_hop, pred_node=pred_node,

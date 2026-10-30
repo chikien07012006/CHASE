@@ -24,7 +24,7 @@
 
 \title{\method{}: Clarifications on the Coverage Guarantee}
 \author{}
-\date{28 October 2026}
+\date{30 October 2026}
 
 \begin{document}
 \maketitle
@@ -46,15 +46,21 @@ For a question $q$ with gold answers $A_q$, the DP gives every node $v$ a score 
 \[
 \sigma^*(q)=\min_{a\in A_q}\sigma_a(q),
 \]
-with $\sigma^*(q)=+\infty$ when no gold answer is reachable within $H$ hops, including answers absent from the graph. By the exact-characterisation lemma of the proposal, the answer set at threshold $\tau<\infty$ contains a gold answer if and only if $\sigma^*(q)\le\tau$.
+with $\sigma^*(q)=+\infty$ when no gold answer is reachable within $H$ hops, including answers absent from the graph. Let $\sigma_{\min}(q)=\min_v\sigma_v(q)$ be the score of the most confident candidate; it uses no labels. \method{} calibrates the \emph{gap}
+\[
+g_v(q)=\sigma_v(q)-\sigma_{\min}(q),\qquad g^*(q)=\sigma^*(q)-\sigma_{\min}(q)=\min_{a\in A_q}g_a(q)\ \ge 0,
+\]
+so that one threshold is measured from each question's own best candidate. By the exact-characterisation lemma of the proposal, the answer set $\{v:\sigma_v(q)\le\sigma_{\min}(q)+\tau\}$, $\tau<\infty$, contains a gold answer if and only if $g^*(q)\le\tau$.
 
 \begin{definition}[Calibration and output]\label{def:out}
-Let $V_i=\sigma^*(q_i)$ on $n$ calibration questions and $k=\lceil(n+1)(1-\alpha)\rceil$. Set $\tauhat=V_{(k)}$, the $k$-th smallest value, if $k\le n$, and $\tauhat=+\infty$ if $k>n$. In both cases $\tauhat=+\infty$ exactly when fewer than $k$ calibration questions can reach an answer. The output for a test question is
+Let $V_i=g^*(q_i)$ on $n$ calibration questions and $k=\lceil(n+1)(1-\alpha)\rceil$. Set $\tauhat=V_{(k)}$, the $k$-th smallest value, if $k\le n$, and $\tauhat=+\infty$ if $k>n$. In both cases $\tauhat=+\infty$ exactly when fewer than $k$ calibration questions can reach an answer. The output for a test question is
 \[
-\hat C(q)=\begin{cases}R_{\tauhat}(q)=\{v:\sigma_v(q)\le\tauhat\} & \text{if }\tauhat<\infty,\\[2pt]
+\hat C(q)=\begin{cases}R_{\tauhat}(q)=\{v:g_v(q)\le\tauhat\} & \text{if }\tauhat<\infty,\\[2pt]
 \textsf{abstain} & \text{if }\tauhat=+\infty.\end{cases}
 \]
 \end{definition}
+
+The pruned search at hop $h$ keeps steps scoring at most $U_h+\tauhat$, where $U_h\ge\sigma_{\min}(q)$ is the best candidate score found at hops $<h$; it returns exactly $R_{\tauhat}(q)$.
 
 \paragraph{Why abstain.}
 Searching with $\tau=+\infty$ prunes nothing, so it would return every answerable node within $H$ hops. Its coverage is then only the reachability $\rho_H<1-\alpha$, so the target is still missed, and the set is very large (thousands of nodes on PrimeKG). $\tauhat=+\infty$ therefore means: \emph{level $\alpha$ cannot be certified on this graph with this $H$}. \method{} reports this instead of returning a set. The decision depends only on the calibration set, so it is known before any test question is seen. In our tables an abstained level is shown as ``---''.
@@ -73,7 +79,7 @@ Searching with $\tau=+\infty$ prunes nothing, so it would return every answerabl
 Let $F$ be the event ``$\tauhat<\infty$ and $\hat C(q)$ contains a gold answer'', and $N$ the event $\{\tauhat=+\infty\}$. Under (A1)--(A2):
 \begin{enumerate}[nosep,label=(\roman*)]
   \item $\Prob(F)\ \ge\ 1-\alpha-\Prob(N)$;
-  \item $\Prob(F)\ \le\ \rho_H$, where $\rho_H=\Prob(\sigma^*(q)<\infty)$;
+  \item $\Prob(F)\ \le\ \rho_H$, where $\rho_H=\Prob(\sigma^*(q)<\infty)=\Prob(g^*(q)<\infty)$;
   \item under (A3) as well, $\Prob(F)\ \le\ 1-\alpha+\frac{1}{n+1}$;
   \item for i.i.d.\ questions and $k\le n$, $\Prob(N)=\Prob\big(\mathrm{Bin}(n,\rho_H)<k\big)$.
 \end{enumerate}
@@ -83,7 +89,7 @@ The probability is over \emph{all} questions, including those whose answers are 
 \begin{proof}[Proof sketch]
 (i) The split-conformal quantile lemma gives $\Prob(V_{n+1}\le\tauhat)\ge1-\alpha$. Ties and infinite values are allowed here, since the proof only uses that, by exchangeability, the test score is among the $k$ smallest of the $n+1$ scores with probability at least $k/(n+1)$. On $\{\tauhat<\infty\}$, the equivalence above turns $V_{n+1}\le\tauhat$ into $F$; the rest of the event lies in $N$.
 
-(ii) A question with $\sigma^*=+\infty$ is never covered.
+(ii) A question with $g^*=+\infty$ is never covered.
 
 (iii) Break ties with i.i.d.\ uniform labels; by exchangeability the rank of the test score among the $n+1$ scores is then uniform on $\{1,\dots,n+1\}$. On $F$, $V_{n+1}$ is finite and $V_{n+1}\le V_{(k)}$. By (A3) no finite calibration score equals $V_{n+1}$, so every calibration score ranked before it is strictly smaller than $V_{(k)}$. There are at most $k-1$ of those, so the test rank is at most $k$. Hence $\Prob(F)\le k/(n+1)<1-\alpha+1/(n+1)$. Infinite calibration scores always rank after a finite test score, so ties at $+\infty$ do not matter.
 
@@ -91,7 +97,15 @@ The probability is over \emph{all} questions, including those whose answers are 
 \end{proof}
 
 \begin{remark}[Why (A3) is needed]
-Without (A3) the upper bound can fail. If every calibration question had the same score $\sigma^*=0.5$, then $\tauhat=0.5$ and every reachable test question with that score would be covered, so the coverage could reach $\rho_H$, far above $1-\alpha+1/(n+1)$. The lower bound (i) holds regardless. Our scores are continuous functions of the question embedding, so exact finite ties occur only for duplicated questions.
+Without (A3) the upper bound can fail. If every calibration question had the same score $g^*=0.5$, then $\tauhat=0.5$ and every reachable test question with that score would be covered, so the coverage could reach $\rho_H$, far above $1-\alpha+1/(n+1)$. The lower bound (i) holds regardless.
+\end{remark}
+
+\begin{remark}[Hit@1 floor]\label{rem:floor}
+The gap has one systematic tie: $g^*(q)=0$ whenever a gold answer is among the most confident candidates. Since $\tauhat\ge0$, these questions are always covered when $\tauhat<\infty$, so
+\[
+\Prob(F)\ \ge\ \Prob\big(g^*(q)=0,\ \tauhat<\infty\big),
+\]
+about Hit@1 (sets are never empty). For $1-\alpha$ below this share, $\tauhat=0$, the output is the top candidates, and the coverage exceeds the target: (A3) fails at $0$ and (iii) does not hold. Above it, finite ties occur only for duplicated questions or tied bottleneck values, and (iii) applies. The lower bound (i) holds at every level.
 \end{remark}
 
 %======================================================================
@@ -110,12 +124,12 @@ A ceiling $\rho_H\approx0.80$ therefore rules out $\alpha<0.2$ only. It neither 
 Dataset & $n$ & reachable & $\hat\rho$ & $\alpha=0.2$ & $\alpha=0.25$ & $\alpha=0.3$\\
 \midrule
 WebQSP & 283  & 273  & 0.965 & $k=228$, attainable & attainable & attainable\\
-CWQ    & 2768 & 2177 & 0.787 & $k=2216>2177$: \textsf{abstain} & $k=2077$, attainable & $k=1939$, attainable\\
+CWQ    & 3519 & 2835 & 0.806 & $k=2816$, attainable (margin 19) & $k=2640$, attainable & $k=2464$, attainable\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\noindent On WebQSP every $\alpha\ge0.05$ is attainable on the official calibration set. On CWQ every $\alpha\le0.2$ abstains, and $\alpha=0.25$ is attainable.
+\noindent The CWQ calibration set is the official validation set. On WebQSP every $\alpha\ge0.05$ is attainable on the official calibration set. On CWQ every $\alpha\le0.1$ abstains; $\alpha=0.2$ is attainable on the official split, but with a margin of 19 questions, so some random re-splits abstain.
 
 \paragraph{Why CWQ is trained at $\alpha=0.3$.}
 The conformal training loss uses $\alpha_{\mathrm{eff}}=1-(1-\alpha)/\rho_{\mathrm{train}}$, which must be positive. With $\rho_{\mathrm{train}}\approx0.795$:
@@ -136,14 +150,14 @@ The three possible targets are different procedures, and only the first is used 
 \toprule
 Target & Guarantee & Method & Used for\\
 \midrule
-At least one answer & $\Prob(\hat C(q)\cap A_q\neq\emptyset)\ge1-\alpha$ (Theorem~\ref{thm:cov}); this is the ECR in all our tables, with the same definition as CPR & split CP on $\min_a\sigma_a$ & WebQSP, CWQ, BioHopR (main)\\
-All answers & $\Prob(A_q\subseteq\hat C(q))\ge1-\alpha$ & split CP on $\max_a\sigma_a$ & defined only, not run\\
+At least one answer & $\Prob(\hat C(q)\cap A_q\neq\emptyset)\ge1-\alpha$ (Theorem~\ref{thm:cov}); this is the ECR in all our tables, with the same definition as CPR & split CP on $\min_a g_a$ & WebQSP, CWQ, BioHopR (main)\\
+All answers & $\Prob(A_q\subseteq\hat C(q))\ge1-\alpha$ & split CP on $\max_a g_a$ & defined only, not run\\
 Miss rate & $\E\big[\,|A_q\setminus\hat C(q)|/|A_q|\,\big]\le\alpha$ & conformal risk control (CRC theorem of the proposal) & BioHopR (additional)\\
 \bottomrule
 \end{tabularx}
 \end{center}
 
-\noindent Split CP (first two rows) controls the \emph{probability} that a question is covered. CRC (last row) controls the \emph{expected share} of answers missed per question. It says nothing about the probability of missing every answer. For CRC, an unreachable answer has $\sigma_a=+\infty$ and always counts as missed. If no finite threshold meets the condition, \method{} abstains, as above.
+\noindent Split CP (first two rows) controls the \emph{probability} that a question is covered. CRC (last row) controls the \emph{expected share} of answers missed per question. It says nothing about the probability of missing every answer. For CRC, an unreachable answer has $g_a=+\infty$ and always counts as missed. If no finite threshold meets the condition, \method{} abstains, as above.
 
 %======================================================================
 \section{How the DP is checked}
@@ -155,7 +169,7 @@ Claim & Test (\code{tests/})\\
 \midrule
 DP score $\sigma_v$ is exact & \code{test\_dp.py::test\_sigma\_matches\_brute\_force}: compares with enumeration of every walk on 60 random graphs, with and without answer masks and feasibility filters; step and stop scores are rounded to $0.1$, so many walks tie\\
 Several answers & \code{test\_dp.py::test\_sigma\_star\_is\_min\_over\_many\_answers}: $\sigma^*$ equals the brute-force minimum over gold answers that include masked, unreachable and topic nodes\\
-Pruned search returns the unpruned set & \code{test\_dp.py::test\_pruned\_run\_returns\_same\_answer\_set\_and\_is\_nested}; also checked on every real test question (\code{pruned\_matches\_unpruned} in \code{metrics.json})\\
+Pruned search returns the unpruned set & \code{test\_dp.py::test\_pruned\_run\_returns\_same\_answer\_set\_and\_is\_nested}; for the gap threshold, \code{test\_gap\_pruned\_run\_returns\_same\_gap\_set\_and\_sigma\_min} (same $\sigma_{\min}$, same set, never empty); also checked on every real test question (\code{pruned\_matches\_unpruned} in \code{metrics.json})\\
 Edge cases & \code{test\_dp.py::test\_edge\_cases} (no topic, no answer), \code{test\_topic\_is\_never\_an\_answer}\\
 $\tauhat=+\infty$; unreachable $=$ miss & \code{test\_conformal.py::test\_quantile\_infeasible\_levels}, \code{test\_unreachable\_questions\_never\_count\_as\_covered}\\
 Theorem~\ref{thm:cov} (i), (iii) & \code{test\_conformal.py::test\_split\_conformal\_coverage\_is\_valid\_and\_tight} (simulation, continuous scores)\\

@@ -153,7 +153,7 @@ def test_calibration_scores_match_dp_and_roundtrip(tmp_path):
         sc = _ConstScorer(rng.random(6), rng.random(6))
         p = CalibrationProblem(kg=kg, topic=[0], answers=[2, 3], scorer=sc, num_absent=1)
         res = bottleneck_dp(kg, [0], sc, 3)
-        expected.append(res.sigma[[2, 3]].min())
+        expected.append(res.sigma[[2, 3]].min() - res.sigma_min)          # gap score g*
         problems.append(p)
     scores = calibration_scores(problems, H=3)
     np.testing.assert_array_equal(scores.sigma_star, expected)

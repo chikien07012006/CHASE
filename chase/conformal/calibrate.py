@@ -23,17 +23,18 @@ class CalibrationProblem:
 
 
 def answer_sigmas(problem: CalibrationProblem, H: int, lam: float = 1.0) -> np.ndarray:
-    """sigma_a for every gold answer (INF if unreachable or absent from the graph), via an unpruned DP."""
+    """Gap score g_a = sigma_a - sigma_min of every gold answer (INF if unreachable or absent from the graph),
+    via an unpruned DP."""
     res = bottleneck_dp(problem.kg, problem.topic, problem.scorer, H, lam=lam,
                         answer_mask=problem.answer_mask, feasible=problem.feasible)
-    found = res.sigma[np.asarray(problem.answers, dtype=np.int64)]
+    found = res.sigma[np.asarray(problem.answers, dtype=np.int64)] - res.sigma_min
     return np.concatenate([found, np.full(problem.num_absent, INF)])
 
 
 @dataclass
 class CalibrationScores:
-    sigma_star: np.ndarray                 # [n] per question: smallest threshold that returns a gold answer
-    answer_sigma: list[np.ndarray]         # per question: sigma_a of every gold answer (for CRC)
+    sigma_star: np.ndarray                 # [n] per question: g*, smallest gap threshold that returns a gold answer
+    answer_sigma: list[np.ndarray]         # per question: g_a of every gold answer (for CRC)
 
     def save(self, path: str | Path) -> None:
         offsets = np.cumsum([0] + [len(a) for a in self.answer_sigma])
