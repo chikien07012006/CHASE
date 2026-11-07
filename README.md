@@ -8,12 +8,12 @@
 
 ![status](https://img.shields.io/badge/status-research%20in%20progress-2a78d6)
 ![python](https://img.shields.io/badge/python-3.11-52514e)
-![tests](https://img.shields.io/badge/tests-261%20passing-1baf7a)
+![tests](https://img.shields.io/badge/tests-293%20passing-1baf7a)
 ![llm](https://img.shields.io/badge/LLM%20calls-0-52514e)
 
 </div>
 
-> **Status (31 Oct 2026).** The full pipeline (graphs → scorer → bottleneck DP → conformal calibration → two-stage training → official evaluation) is implemented and tested. Results on **WebQSP** and **CWQ** (3 seeds each), the comparison with reported CPR / UaG and the same-scorer baselines are in [`docs/results.md`](docs/results.md). BioHopR is in progress.
+> **Status (7 Nov 2026).** The full pipeline (graphs → scorer → bottleneck DP → conformal calibration → two-stage training → official evaluation) is implemented and tested. Results on **WebQSP** and **CWQ** (3 seeds each), the comparison with reported CPR / UaG and the same-scorer baselines are in [`docs/results.md`](docs/results.md). **BioHopR** (3 seeds, same-scorer baselines) has its first results; see [BioHopR](#biohopr-first-results) and [`biohopr.md`](biohopr.md). Next: tie-breaking among equal bottleneck scores, ablations, paper.
 
 ---
 
@@ -75,13 +75,24 @@ Full method and proofs: [`proposal_chase.tex`](proposal_chase.tex). The coverage
 
 The pruned search returns exactly the unpruned set on every test question, visits 3–27× fewer DP states, and takes about 7 ms per question on a laptop CPU.
 
+### BioHopR (first results)
+
+3 seeds, own 70 / 15 / 15 split by topic, cal = validation (1,520 questions), training α = 0.1. No published numbers exist for BioHopR, so the same-scorer baselines are the comparison. Target: at least one correct answer.
+
+- **Only high coverage is informative.** Hit@1 is about 89% (a question has 33 answers on average), so every α ≥ 0.11 returns the floor set; 3.5–4.5% of questions have no reachable answer, so α ≤ 0.045 often abstains. Results use α = 0.04–0.12 in steps of 0.005, i.e. coverage 89–95%.
+- **Coverage is on target**: re-split mean ECR 95.0% at α = 0.05. The official test split is 1–2 points below, because it has fewer reachable questions than cal (95.5% vs 96.5%).
+- **Same scorer, equal coverage** (APSS ratio CHASE / baseline): UaG-style per-hop 0.17–0.38; CPR-style B = 128 0.18–0.83; B = 32 0.32–0.74 below 91% and 0.94–1.22 at 91.5–92%; B = 8 is 1.1–2.3× smaller at 90–91% but cannot exceed 91%. Beams reach a gold answer for 90.9 / 92.5 / 93.9% of questions, CHASE for 95.5%.
+- **Conformal top-K is smaller at 89.6–94%** (1.2–6.7×); CHASE is smaller above 94.6%. Cause: the bottleneck score ties every answer reached through the same weak first edge, and CHASE returns the whole tie while top-K breaks it by node id. Tie-breaking is the next step.
+
+![BioHopR same scorer](docs/figures/biohopr_baselines.png)
+
 ## Benchmarks
 
 | Dataset | Searchable KG | Role | Test | Answer in graph | ρ₁ | ρ₂ |
 |---|---|---|---|---|---|---|
 | WebQSP (RoG) | Freebase, one subgraph per question | Direct comparison with UaG / CPR | 1,628 | 95.64% | 66.28% | **95.33%** |
 | CWQ (RoG) | Freebase, one subgraph per question | Direct comparison, compositional | 3,531 | 80.66% | 43.95% | **80.12%** |
-| BioHopR | Full PrimeKG (134k nodes, 4.1M edges) | Biomedical, multi-answer (36.65 answers / question) | own split | — | — | — |
+| BioHopR | Full PrimeKG (134k nodes, 4.1M edges), one type-feasible subgraph per question | Biomedical, multi-answer (≈ 33 answers / question) | 1,518 (own split) | 95.5% | 27.6% | **95.5%** |
 
 ρ_H is the share of questions with a gold answer reachable within H hops: an upper bound on coverage for **every** method. It stops growing at H = 2, because RoG subgraphs are 2-hop neighbourhoods.
 
@@ -93,13 +104,13 @@ chase/
   model/       text_cache.py (frozen MiniLM) · features.py · scorer.py (StateScorer, BoundScorer, ScoreTables)
   search/      dp.py (bottleneck DP, evidence walks, rho_H)
   conformal/   split.py (split CP, CRC) · calibrate.py (calibration scores from the DP)
-  data/        splits.py · gold_paths.py (path enumeration + coincidental-path filter)
+  data/        splits.py · gold_paths.py (path enumeration + coincidental-path filter) · biohopr.py (BioHopR store on PrimeKG)
   train/       losses.py (BCE, soft DP, ConfTr) · sampler.py · train.py · evaluate.py
   eval/        freebase.py (official evaluation) · compare.py (multi-seed, same α / equal coverage) · plots.py · reference.py (published baselines)
   baselines/   same-scorer baselines: conformal top-K · CPR-style beam · UaG-style per-hop
-tests/         261 unit tests
+tests/         293 unit tests
 docs/          results.md (all results and their sources) · baselines.md (how UaG, CPR, top-K and CHASE build their sets) · figures/
-proposal_chase.tex · theory.tex · requirements.txt
+biohopr.md (BioHopR pipeline, in Vietnamese) · proposal_chase.tex · theory.tex · requirements.txt
 ```
 
 ## Setup
@@ -164,10 +175,28 @@ python -m chase.model.text_cache primekg data/processed/primekg_full
 python -m chase.kg.type_distance --kg data/processed/primekg_full
 ```
 
+BioHopR: only the store differs; every later step reuses the commands above. Details, timings and the full command list: [`biohopr.md`](biohopr.md).
+
+```bash
+D=data/processed/biohopr
+python -m chase.data.biohopr --out $D                                         # store on PrimeKG   ~1.5 min
+python -m chase.model.text_cache freebase $D
+python -m chase.data.splits --data $D --cal-from validation
+python -m chase.data.gold_paths --data $D --split train --H 2
+# train as above (default α = 0.1); evaluate and run the baselines on the high-coverage grid:
+A=(0.04 0.045 0.05 0.055 0.06 0.065 0.07 0.075 0.08 0.085 0.09 0.095 0.1 0.105 0.11 0.115 0.12)   # zsh array
+python -m chase.eval.freebase --data $D --model runs/biohopr_seed0/best.pt --out runs/biohopr_seed0/eval \
+                              --dataset biohopr --alphas $A
+python -m chase.baselines.run --data $D --model runs/biohopr_seed0/best.pt --out runs/biohopr_seed0/baselines \
+                              --beams 8 32 128 --alphas $A
+```
+
+`--alphas` sets the levels of the tables; the baseline figure is drawn over that α range only.
+
 ## Testing
 
 ```bash
-python -m pytest tests -q        # 261 tests, ~10 s
+python -m pytest tests -q        # 293 tests, ~10 s
 ```
 
 The key invariants are checked against brute force: the DP's σ equals enumeration of every walk; a pruned search returns exactly the unpruned answer set; the soft DP converges to the hard DP as T → 0; split-conformal and CRC thresholds meet their guarantees in simulation; `bind()` lookup tables equal the full forward pass.
@@ -182,8 +211,10 @@ The key invariants are checked against brute force: the DP's σ equals enumerati
 - [x] WebQSP / CWQ results, 3 seeds each
 - [x] Same-α and equal-coverage comparison with reported CPR / UaG; theory note
 - [x] Same-scorer baselines: per-hop (UaG-style), Bonferroni, fixed beam + post-hoc (CPR-style), conformal top-K
+- [x] BioHopR store (name linking, type-feasible subgraphs, topic-grouped split); 3 seeds; same-scorer baselines
+- [ ] Tie-breaking among equal bottleneck scores (re-evaluate all datasets)
 - [ ] Paired bootstrap
-- [ ] BioHopR (entity linking, CRC); CPR re-run under identical conditions
+- [ ] BioHopR: CRC for multi-answer recall; Mondrian by hop count
 - [ ] Ablations RQ6; paper
 
 ## Citation
