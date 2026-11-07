@@ -64,24 +64,25 @@ def _cost(recs: list[SigmaRecord]) -> dict:
             "reach": float(np.mean([np.isfinite(r.sigma_star) for r in recs]))}
 
 
-def evaluate(cal: dict, test: dict, beams: list[int], n_splits: int, n_splits_hop: int) -> dict:
+def evaluate(cal: dict, test: dict, beams: list[int], n_splits: int, n_splits_hop: int, alphas=ALPHAS) -> dict:
     """{method: {"official": [rows per alpha], "resplit": {alpha: summary}, "cost": {...}}}"""
     methods = {}
+    grid = sorted(set(GRID) | set(alphas))
     scalar = {"CHASE": "chase", "Top-K": "topk", **{f"CPR-style B={b}": f"beam{b}" for b in beams}}
     for name, key in scalar.items():
-        rs = resplit_samples(cal[key], test[key], GRID, n_splits)
-        methods[name] = {"official": [metrics_at(cal[key], test[key], a) for a in ALPHAS],
-                         "resplit": {str(a): _summarise(rs[a]) for a in GRID}, "cost": _cost(test[key])}
+        rs = resplit_samples(cal[key], test[key], grid, n_splits)
+        methods[name] = {"official": [metrics_at(cal[key], test[key], a) for a in alphas],
+                         "resplit": {str(a): _summarise(rs[a]) for a in grid}, "cost": _cost(test[key])}
     for b in beams:
         key = f"beam{b}"
-        rs = beam.cpr_resplit_samples(cal[key], test[key], GRID, n_splits)
+        rs = beam.cpr_resplit_samples(cal[key], test[key], grid, n_splits)
         methods[f"CPR-style B={b}, CPR rule"] = {
-            "official": [beam.cpr_metrics_at(cal[key], test[key], a) for a in ALPHAS],
-            "resplit": {str(a): _summarise(rs[a]) for a in GRID}, "cost": _cost(test[key])}
+            "official": [beam.cpr_metrics_at(cal[key], test[key], a) for a in alphas],
+            "resplit": {str(a): _summarise(rs[a]) for a in grid}, "cost": _cost(test[key])}
     for alloc, name in [("per_hop", "UaG-style per-hop"), ("bonferroni", "UaG-style Bonferroni")]:
-        rs = per_hop.resplit_samples(cal["comp"], test["comp"], cal["table"], test["table"], GRID, alloc, n_splits_hop)
-        methods[name] = {"official": [per_hop.metrics_at(cal["comp"], test["table"], a, alloc) for a in ALPHAS],
-                         "resplit": {str(a): _summarise(rs[a]) for a in GRID}, "cost": {}}
+        rs = per_hop.resplit_samples(cal["comp"], test["comp"], cal["table"], test["table"], grid, alloc, n_splits_hop)
+        methods[name] = {"official": [per_hop.metrics_at(cal["comp"], test["table"], a, alloc) for a in alphas],
+                         "resplit": {str(a): _summarise(rs[a]) for a in grid}, "cost": {}}
     return methods
 
 
@@ -100,11 +101,11 @@ def _f(x, fmt="{:.2f}") -> str:
     return fmt.format(x) if x is not None and np.isfinite(x) else "—"
 
 
-def tables(methods: dict, matched: list[dict]) -> str:
+def tables(methods: dict, matched: list[dict], alphas=ALPHAS) -> str:
     names = list(methods)
     lines = ["**Same α, official split**: ECR % / APSS / empty %. '—' = abstain (τ̂ = ∞).", "",
              "| α | " + " | ".join(names) + " |", "|---|" + "---|" * len(names)]
-    for i, a in enumerate(ALPHAS):
+    for i, a in enumerate(alphas):
         cells = []
         for n in names:
             r = methods[n]["official"][i]
@@ -112,7 +113,7 @@ def tables(methods: dict, matched: list[dict]) -> str:
         lines.append(f"| {a} | " + " | ".join(cells) + " |")
     lines += ["", "**Same α, re-split means**: ECR % / APSS (abstain share if > 0).", "",
               "| α | " + " | ".join(names) + " |", "|---|" + "---|" * len(names)]
-    for a in ALPHAS:
+    for a in alphas:
         cells = []
         for n in names:
             r = methods[n]["resplit"][str(a)]
@@ -137,7 +138,8 @@ def tables(methods: dict, matched: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def run(data: str, model: str, out: str, H: int, beams: list[int], n_splits: int, n_splits_hop: int) -> None:
+def run(data: str, model: str, out: str, H: int, beams: list[int], n_splits: int, n_splits_hop: int,
+        alphas=ALPHAS) -> None:
     from chase.data.splits import load_splits
     from chase.baselines.report import equal_coverage_figure
     from chase.kg.subgraphs import SubgraphStore
@@ -160,13 +162,14 @@ def run(data: str, model: str, out: str, H: int, beams: list[int], n_splits: int
                                   H, lam, beams, desc=split)
     print(f"{CYAN}cal {len(recs['cal']['chase'])} | test {len(recs['test']['chase'])} | {time.time() - t0:.0f}s; "
           f"calibrating and re-splitting{RESET}")
-    methods = evaluate(recs["cal"], recs["test"], beams, n_splits, n_splits_hop)
-    matched = matched_coverage(recs["cal"]["chase"], recs["test"]["chase"], as_reference(methods), n_splits)
-    result = {"dataset": Path(data).name, "model": model, "H": H, "lam": lam, "beams": beams, "n_splits": n_splits,
+    methods = evaluate(recs["cal"], recs["test"], beams, n_splits, n_splits_hop, alphas)
+    matched = matched_coverage(recs["cal"]["chase"], recs["test"]["chase"], as_reference(methods, alphas), n_splits)
+    result = {"dataset": Path(data).name, "model": model, "H": H, "lam": lam, "beams": beams, "alphas": alphas,
+              "n_splits": n_splits,
               "n_splits_per_hop": n_splits_hop, "methods": methods, "matched": matched["points"],
               "chase_curve": matched["curve"]}
     (out_dir / "baselines.json").write_text(json.dumps(result, indent=2, default=float))
-    md = tables(methods, matched["points"])
+    md = tables(methods, matched["points"], alphas)
     (out_dir / "baselines.md").write_text(f"# Same-scorer baselines: {result['dataset']}\n\nModel: `{model}`\n\n{md}\n")
     equal_coverage_figure([result], out_dir)
     print(md)
@@ -181,10 +184,12 @@ def main() -> None:
     ap.add_argument("--out", required=True, help="e.g. runs/webqsp_seed0/baselines")
     ap.add_argument("--H", type=int, default=2)
     ap.add_argument("--beams", type=int, nargs="+", default=[32], help="TreeG branch = active size (CPR default 32)")
+    ap.add_argument("--alphas", type=float, nargs="+", default=ALPHAS, help="levels of the tables (re-split grid adds them)")
     ap.add_argument("--resplits", type=int, default=1000)
     ap.add_argument("--resplits-per-hop", type=int, default=200, help="per-hop re-splits need a table pass each")
     args = ap.parse_args()
-    run(args.data, args.model, args.out, args.H, args.beams, args.resplits, args.resplits_per_hop)
+    run(args.data, args.model, args.out, args.H, args.beams, args.resplits, args.resplits_per_hop,
+        [round(a, 4) for a in args.alphas])
 
 
 if __name__ == "__main__":

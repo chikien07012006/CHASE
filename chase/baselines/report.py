@@ -38,26 +38,29 @@ def equal_coverage_figure(results: list[dict], out: Path, name: str = "fig_basel
     """APSS against re-split mean coverage, same scorer for every method (log scale)."""
     plt = plots.plt
     plots._style()
-    curves = [r["chase_curve"] for r in results]
-    keep = [i for i in range(len(curves[0])) if all(_usable(c[i]) for c in curves)]
+    lo, hi = (min(a := results[0].get("alphas", ALPHAS)), max(a))     # draw only the alpha range of the run
     fig, ax = plt.subplots(figsize=(6.2, 4.0))
-    plots._seed_band(ax, 100 * np.mean([[c[i]["ecr_mean"] for i in keep] for c in curves], axis=0),
-                     np.array([[c[i]["apss_mean"] for i in keep] for c in curves]), "CHASE")
     beams = [int(m.split("B=")[1].split(",")[0]) for m in methods if m.startswith("CPR-style")]
-    missing = []
+    missing, xs = [], []
     for nm in methods:
         if nm not in results[0]["methods"]:
             continue
         rs = [r["methods"][nm]["resplit"] for r in results]
-        alphas = [a for a in rs[0] if all(_usable(x[a]) for x in rs)]
+        alphas = [a for a in rs[0] if lo - 1e-9 <= float(a) <= hi + 1e-9 and all(_usable(x[a]) for x in rs)]
         if not alphas:
             missing.append(nm)
             continue
         x = [100 * np.mean([r[a]["ecr_mean"] for r in rs]) for a in alphas]
         y = [np.mean([r[a]["apss_mean"] for r in rs]) for a in alphas]
+        xs += x
         label = f"{nm} ({INVALID[nm]})" if nm in INVALID else nm
         ax.plot(x, y, "o--" if "CPR rule" in nm or nm in INVALID else "o-", color=_colour(nm, beams), ms=3, lw=1.2,
                 label=label)
+    curves = [r["chase_curve"] for r in results]
+    keep = [i for i in range(len(curves[0])) if all(_usable(c[i]) for c in curves)]
+    ecr = 100 * np.mean([[c[i]["ecr_mean"] for i in keep] for c in curves], axis=0)
+    inside = (ecr >= min(xs) - 1) & (ecr <= max(xs) + 1) if xs else np.ones(len(keep), bool)
+    plots._seed_band(ax, ecr[inside], np.array([[c[i]["apss_mean"] for i in keep] for c in curves])[:, inside], "CHASE")
     if missing:
         ax.text(0.02, 0.02, "Not drawn (abstains at every level in some seed): " + ", ".join(missing),
                 transform=ax.transAxes, fontsize=7, color=plots.INK_2)
@@ -73,7 +76,7 @@ def same_alpha_table(results: list[dict]) -> str:
     names = list(results[0]["methods"])
     lines = ["**Same α, official split**: ECR % / APSS, mean ± std over seeds. '—' = abstain in some seed.", "",
              "| α | " + " | ".join(names) + " |", "|---|" + "---|" * len(names)]
-    for i, a in enumerate(ALPHAS):
+    for i, a in enumerate(results[0].get("alphas", ALPHAS)):
         cells = []
         for n in names:
             rows = [r["methods"][n]["official"][i] for r in results]
