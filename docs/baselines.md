@@ -68,7 +68,7 @@ UaG has no public code. This section describes the idea of the paper. The paper 
 
 ### Steps
 
-1. **Ranking.** Run the search without pruning and rank every candidate node by its score (CHASE's σ_v, ties broken by node id).
+1. **Ranking.** Run the search without pruning and rank every candidate node by its score (CHASE's order: σ_v, then the stop score, then node id).
 2. **Calibration.** For each calibration question, the score is the rank of its best gold answer (∞ if no gold answer is reachable).
 3. **Threshold.** K̂ is the split-conformal quantile of these ranks.
 4. **Prediction.** Return the top K̂ nodes for every test question.
@@ -96,12 +96,13 @@ Top-K uses the **same scorer and the same ranking** as CHASE. Only the cut diffe
    - It runs in O(H(|V| + |E|)), with no beam or cap.
 4. **Gap score.** σ_min(q) is the score of the most confident candidate of the question. Every candidate gets the gap g_v = σ_v − σ_min(q), and each calibration question gets g\*(q) = σ\*(q) − σ_min(q), where σ\*(q) = min over its gold answers of σ_a (∞ if no gold answer is reachable). τ̂ is the split-conformal quantile of g\*. If too few calibration questions are reachable, τ̂ = ∞ and CHASE **abstains** at that level.
    - Why the gap: σ's level varies between questions. One absolute threshold is then too loose for questions with low scores (large sets) and too tight for questions with high scores (empty sets). Measuring every question from its own best candidate makes one threshold comparable across questions.
-5. **Prediction.** Run the same DP at test time and return {v : σ_v ≤ σ_min(q) + τ̂}. Pruning happens inside the search: hop h is pruned at U + τ̂, where U is the best candidate score found at earlier hops. U ≥ σ_min, so the returned set is exactly the unpruned one. Only the cost drops.
+   - Ties: σ is a maximum of step scores, so nodes reached through the same weak step share σ. Candidates are therefore ordered by the pair (g_v, t_v), lexicographically, where t_v is λ times the stop score of v at the hop that attains σ_v (measured from the top candidate, like the gap). τ̂ is the conformal quantile of these pairs; conformal calibration needs only a total order.
+5. **Prediction.** Run the same DP at test time and return the candidates whose pair is ≤ τ̂, i.e. σ_v ≤ σ_min(q) + τ̂_g with the tie at τ̂_g cut by the stop score. Pruning happens inside the search: hop h is pruned at U + τ̂_g, where U is the best candidate score found at earlier hops. U ≥ σ_min, so the returned set is exactly the unpruned one. Only the cost drops.
 6. **Training.** Stage 1 uses BCE on gold steps. Stage 2 is conformal training through a soft version of the DP: it places a batch threshold on g\* and minimises the number of wrong answers within that gap.
 
 ### Why coverage is exact
 
-- A gold answer is returned ⇔ g\*(q) ≤ τ̂.
+- A gold answer is returned ⇔ the pair of the best gold answer is ≤ τ̂.
 - σ_min uses no labels, so g\* is one exchangeable score per question.
 - The split-conformal theorem therefore applies directly: coverage ≥ 1 − α, and ≤ 1 − α + 1/(n+1) when there are no finite ties.
 - Unreachable questions count as misses.
@@ -109,8 +110,7 @@ Top-K uses the **same scorer and the same ranking** as CHASE. Only the cut diffe
 ### Weaknesses
 
 - **Coverage cannot go below Hit@1.** The most confident candidate always has gap 0 and is always returned, so a set is empty only when the question has no reachable candidate at all (0% of WebQSP and 0.06% of CWQ test questions). When 1 − α is below Hit@1, CHASE returns the top candidate and covers more than the target (like top-K and CPR's fallback).
-- **Conformal top-K is smaller at mid coverage.** Under the same scorer, a fixed K̂ beats the per-question gap threshold at mid coverage: 1.6–2.1× smaller sets at 66–81% ECR on WebQSP, and 1.06–1.22× at 45–61% on CWQ. CHASE is smaller at high coverage (≥ 90% on WebQSP, 80% on CWQ). The ranking is good, but gaps are not yet fully comparable across questions.
-- **Ties at the top.** The bottleneck score is a maximum of step scores, so several candidates can share σ_min. They are all returned at gap 0.
+- **Conformal top-K is smaller at mid coverage.** Under the same scorer, a fixed K̂ beats the per-question gap threshold at mid coverage: 1.6–2.2× smaller sets at 66–81% ECR on WebQSP, and 1.08–1.22× at 45–61% on CWQ; on BioHopR, 1.2–6.6× at 89.6–94%. CHASE is smaller at high coverage (≥ 90% on WebQSP, 80% on CWQ, 94.6% on BioHopR). The ranking is good, but gaps are not yet fully comparable across questions.
 - **Capped by reachability.** Coverage above ρ_H, the share of questions with a reachable answer, is impossible. Near the cap the sets grow fast (CWQ, ρ ≈ 0.80). This cap applies to every method, but CHASE reports the cap honestly instead of hiding it.
 - **The guarantee is marginal.** It holds on average over questions, not for each question, and it needs calibration and test questions to be exchangeable.
 - **It needs a trained scorer.** Set sizes are only as good as the step and stop scores.

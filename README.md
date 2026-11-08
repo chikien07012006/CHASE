@@ -8,12 +8,12 @@
 
 ![status](https://img.shields.io/badge/status-research%20in%20progress-2a78d6)
 ![python](https://img.shields.io/badge/python-3.11-52514e)
-![tests](https://img.shields.io/badge/tests-293%20passing-1baf7a)
+![tests](https://img.shields.io/badge/tests-344%20passing-1baf7a)
 ![llm](https://img.shields.io/badge/LLM%20calls-0-52514e)
 
 </div>
 
-> **Status (7 Nov 2026).** The full pipeline (graphs → scorer → bottleneck DP → conformal calibration → two-stage training → official evaluation) is implemented and tested. Results on **WebQSP** and **CWQ** (3 seeds each), the comparison with reported CPR / UaG and the same-scorer baselines are in [`docs/results.md`](docs/results.md). **BioHopR** (3 seeds, same-scorer baselines) has its first results; see [BioHopR](#biohopr-first-results) and [`biohopr.md`](biohopr.md). Next: tie-breaking among equal bottleneck scores, ablations, paper.
+> **Status (8 Nov 2026).** The full pipeline (graphs → scorer → bottleneck DP → conformal calibration → two-stage training → official evaluation) is implemented and tested. Results on **WebQSP**, **CWQ** and **BioHopR** (3 seeds each), the comparison with reported CPR / UaG, the same-scorer baselines and the gap-vs-rank ablation are in [`docs/results.md`](docs/results.md) and [BioHopR](#biohopr). Next: paired bootstrap, cost of the pruned search against the baselines, further ablations, paper.
 
 ---
 
@@ -44,7 +44,8 @@ question + topic entities ─► state-based scorer ─► bottleneck DP, pruned
 1. **State-based scorer.** A step head scores each expansion (hop $h$, relation $r$, node $v$); a stop head scores returning $v$ at hop $h$. Each head is $\mathrm{MLP}([q;r;h]) + \langle P(q,h), Q(v)\rangle$ with frozen MiniLM inputs, and the nonconformity is $s=\mathrm{softplus}(-\text{logit})$. The logit is additive, so scoring any edge is a table lookup: 1M edges in 37 ms.
 2. **Max-prefix score.** Irreversible pruning keeps a walk iff every step scores ≤ τ, so a walk's cost is its worst step.
 3. **Bottleneck DP.** $b_h(v)=\min_{u\to v}\max\{b_{h-1}(u),\,s_h(q,r,v)\}$ gives, for every node, $\sigma_v$ = the smallest threshold at which the search returns $v$. It is exact, takes $O(H(|V|+|E|))$, and needs no beam or hard cap.
-4. **Calibration on the gap.** $\sigma^*(q)=\min_{a\in A_q}\sigma_a$ is the smallest threshold at which the search finds a correct answer, and $\sigma_{\min}(q)$ is the score of the most confident candidate. CHASE calibrates the gap $g^*(q)=\sigma^*(q)-\sigma_{\min}(q)$ and returns $\{v:\sigma_v\le\sigma_{\min}(q)+\hat\tau\}$. $\sigma_{\min}$ uses no labels, so $g^*$ is still one exchangeable score per question and coverage is exact. Measuring every question from its own best candidate makes one threshold comparable across questions; the most confident candidate is always returned, so coverage cannot fall below about Hit@1. The pruned search uses the best candidate found so far as an upper bound on $\sigma_{\min}$ and returns exactly the unpruned set. Levels above the KG ceiling are reported as **infeasible**.
+4. **Calibration on the gap.** $\sigma^*(q)=\min_{a\in A_q}\sigma_a$ is the smallest threshold at which the search finds a correct answer, and $\sigma_{\min}(q)$ is the score of the most confident candidate. CHASE calibrates the gap $g^*(q)=\sigma^*(q)-\sigma_{\min}(q)$ and returns $\{v:\sigma_v\le\sigma_{\min}(q)+\hat\tau\}$. $\sigma_{\min}$ uses no labels, so $g^*$ is still one exchangeable score per question and coverage is exact. Measuring every question from its own best candidate makes one threshold comparable across questions; the most confident candidate is always returned, so coverage cannot fall below Hit@1.
+   **Ties.** Nodes reached through the same weak step share σ, so candidates are ordered by the pair (gap, λ·stop score at the node's best hop), lexicographically, and τ̂ is the conformal quantile of that pair. Conformal calibration needs only a total order, so the guarantee is unchanged, and at the lowest level the set is the single top candidate. The pruned search uses the best candidate found so far as an upper bound on $\sigma_{\min}$ and returns exactly the unpruned set. Levels above the KG ceiling are reported as **infeasible**.
 5. **Two-stage training.** Stage 1 trains a BCE loss on steps and stops, with labels from filtered gold paths. Stage 2 extends ConfTr to graph search: a soft bottleneck DP plus a differentiable quantile on half a batch, minimising the soft number of *wrong* answers within the calibrated gap on the other half.
 6. **Type feasibility (typed KGs)** and **conformal risk control** for multi-answer recall are implemented for the biomedical benchmark.
 
@@ -54,37 +55,41 @@ Full method and proofs: [`proposal_chase.tex`](proposal_chase.tex). The coverage
 
 3 seeds per dataset, H = 2, commit `debca94`. Full tables, coverage checks and sources for every number: [`docs/results.md`](docs/results.md).
 
-**Coverage is on target.** Over 1,000 re-splits of cal and test, mean ECR equals 1 − α to within 0.5 points on both datasets. On the official split, CWQ is on target; WebQSP, with only 283 cal questions, is on average 1–2 points below, inside the theory interval. Coverage cannot fall below a floor of about Hit@1 (56.7% WebQSP, 36.5% CWQ), and CWQ abstains at α ≤ 0.1 because of its reachability ceiling (0.80).
+**Coverage is on target.** Over 1,000 re-splits of cal and test, mean ECR equals 1 − α to within 0.5 points on both datasets. On the official split, CWQ is on target; WebQSP, with only 283 cal questions, is on average 1–2 points below, inside the theory interval. Coverage cannot fall below Hit@1 (55.4% WebQSP, 32.9% CWQ), where the set is the single top candidate, and CWQ abstains at α ≤ 0.1 because of its reachability ceiling (0.80).
 
 **Equal coverage vs reported numbers.** APSS ratio CHASE / other (< 1: CHASE smaller):
 
 | | WebQSP | CWQ |
 |---|---|---|
-| CPR (reported) | 0.40–0.47 at 58–77% | 0.35–0.82 at 43–68%; **1.71 at 77%** (near the ceiling) |
-| UaG (reported) | 0.06–0.08 at 60–72% | 0.02 at 37–42% |
+| CPR (reported) | 0.37–0.47 at 58–77% | 0.35–0.82 at 43–68%; **1.71 at 77%** (near the ceiling) |
+| UaG (reported) | 0.06–0.08 at 60–72% | 0.01–0.02 at 37–42% |
 
 **Same scorer.** With every method on the trained CHASE scorer:
-- CHASE beats UaG-style per-hop and Bonferroni (1.6–2.9× smaller sets) and fixed beams with post-hoc filtering at B ≥ 32 at almost every level.
+- CHASE beats UaG-style per-hop and Bonferroni (1.6–3.1× smaller sets) and fixed beams with post-hoc filtering at B ≥ 32 at almost every level.
 - Beams lose answers. B = 8 / 32 / 128 reaches a gold answer for 77 / 86 / 92% of WebQSP and 53 / 67 / 76% of CWQ questions, against 95% and 80% for CHASE.
-- **Conformal top-K is smaller at mid coverage** (up to 2.1× on WebQSP at 66–81%), and CHASE is smaller at high coverage (≥ 90% WebQSP, 80% CWQ).
+- **Ablation, gap vs rank threshold.** Conformal top-K (same scorer, same calibration, rank instead of gap) is smaller at mid coverage (up to 2.2× on WebQSP at 66–81%), and CHASE is smaller at high coverage (≥ 90% WebQSP, 80% CWQ). Top-K is not a method of the literature; it isolates the choice of score.
 
 | | |
 |---|---|
 | ![WebQSP equal coverage](docs/figures/webqsp_equal_coverage.png) | ![CWQ equal coverage](docs/figures/cwq_equal_coverage.png) |
 | ![WebQSP same scorer](docs/figures/webqsp_baselines.png) | ![CWQ same scorer](docs/figures/cwq_baselines.png) |
+| ![WebQSP gap vs rank](docs/figures/webqsp_ablation_rank.png) | ![CWQ gap vs rank](docs/figures/cwq_ablation_rank.png) |
 
 The pruned search returns exactly the unpruned set on every test question, visits 3–27× fewer DP states, and takes about 7 ms per question on a laptop CPU.
 
-### BioHopR (first results)
+### BioHopR
 
 3 seeds, own 70 / 15 / 15 split by topic, cal = validation (1,520 questions), training α = 0.1. No published numbers exist for BioHopR, so the same-scorer baselines are the comparison. Target: at least one correct answer.
 
-- **Only high coverage is informative.** Hit@1 is about 89% (a question has 33 answers on average), so every α ≥ 0.11 returns the floor set; 3.5–4.5% of questions have no reachable answer, so α ≤ 0.045 often abstains. Results use α = 0.04–0.12 in steps of 0.005, i.e. coverage 89–95%.
+- **Only high coverage is informative.** Hit@1 is about 89% (a question has 33 answers on average), so every α ≥ 0.105 returns the single top candidate; 3.5–4.5% of questions have no reachable answer, so α ≤ 0.045 often abstains. Results use α = 0.04–0.12 in steps of 0.005, i.e. coverage 89–95%.
 - **Coverage is on target**: re-split mean ECR 95.0% at α = 0.05. The official test split is 1–2 points below, because it has fewer reachable questions than cal (95.5% vs 96.5%).
-- **Same scorer, equal coverage** (APSS ratio CHASE / baseline): UaG-style per-hop 0.17–0.38; CPR-style B = 128 0.18–0.83; B = 32 0.32–0.74 below 91% and 0.94–1.22 at 91.5–92%; B = 8 is 1.1–2.3× smaller at 90–91% but cannot exceed 91%. Beams reach a gold answer for 90.9 / 92.5 / 93.9% of questions, CHASE for 95.5%.
-- **Conformal top-K is smaller at 89.6–94%** (1.2–6.7×); CHASE is smaller above 94.6%. Cause: the bottleneck score ties every answer reached through the same weak first edge, and CHASE returns the whole tie while top-K breaks it by node id. Tie-breaking is the next step.
+- **Same scorer, equal coverage** (APSS ratio CHASE / baseline): UaG-style per-hop 0.11–0.38 at 90–94%; UaG-style Bonferroni 0.19 at 94% (its only feasible level); CPR-style B = 128 0.07–0.78 at 89–94%; B = 32 0.12–0.98 below 91.5% and 0.94–1.22 at 91.5–92%; B = 8 0.29–0.99 at 89–90% and 1.25–1.41 at 90.3–90.4%, and cannot exceed 91%. Beams reach a gold answer for 90.9 / 92.5 / 93.9% of questions, CHASE for 95.5%.
+- **Ablation, gap vs rank threshold.** Conformal top-K is smaller at 89.6–94% (1.2–6.6×); CHASE is smaller at ≥ 94.6% (0.71–0.95). The gold answer usually ranks among the first few candidates, but its gap varies widely across questions, so one gap threshold must be wide.
+- **Ties matter most here.** Breaking ties by the stop score shrinks the set at the lowest level from 4.18 to 0.98 nodes, with the same coverage elsewhere.
 
-![BioHopR same scorer](docs/figures/biohopr_baselines.png)
+| | |
+|---|---|
+| ![BioHopR same scorer](docs/figures/biohopr_baselines.png) | ![BioHopR gap vs rank](docs/figures/biohopr_ablation_rank.png) |
 
 ## Benchmarks
 
@@ -191,12 +196,14 @@ python -m chase.baselines.run --data $D --model runs/biohopr_seed0/best.pt --out
                               --beams 8 32 128 --alphas $A
 ```
 
-`--alphas` sets the levels of the tables; the baseline figure is drawn over that α range only.
+`--alphas` sets the levels of the tables; the baseline figures are drawn over that α range only. `--tie-break none` (eval and baselines) orders candidates by σ alone, for the ablation.
+
+`report` writes `baselines_compare.md`, `fig_baselines_equal_coverage` (CHASE vs CPR-style and UaG-style) and `fig_ablation_rank` (CHASE vs top-K).
 
 ## Testing
 
 ```bash
-python -m pytest tests -q        # 293 tests, ~10 s
+python -m pytest tests -q        # 344 tests, ~20 s
 ```
 
 The key invariants are checked against brute force: the DP's σ equals enumeration of every walk; a pruned search returns exactly the unpruned answer set; the soft DP converges to the hard DP as T → 0; split-conformal and CRC thresholds meet their guarantees in simulation; `bind()` lookup tables equal the full forward pass.
@@ -212,7 +219,7 @@ The key invariants are checked against brute force: the DP's σ equals enumerati
 - [x] Same-α and equal-coverage comparison with reported CPR / UaG; theory note
 - [x] Same-scorer baselines: per-hop (UaG-style), Bonferroni, fixed beam + post-hoc (CPR-style), conformal top-K
 - [x] BioHopR store (name linking, type-feasible subgraphs, topic-grouped split); 3 seeds; same-scorer baselines
-- [ ] Tie-breaking among equal bottleneck scores (re-evaluate all datasets)
+- [x] Tie-breaking by the stop score (ablation: `--tie-break none`)
 - [ ] Paired bootstrap
 - [ ] BioHopR: CRC for multi-answer recall; Mondrian by hop count
 - [ ] Ablations RQ6; paper

@@ -40,6 +40,7 @@ class DPResult:
     pred_rel: np.ndarray | None      # [H+1, N]
     states_expanded: int
     edges_scored: int
+    tie: np.ndarray | None = None    # [N] lam * stop score at best_hop: breaks ties in sigma (INF if never returned)
 
     def answer_set(self, tau: float) -> np.ndarray:
         """Nodes returned at threshold tau, most confident (lowest sigma) first."""
@@ -102,6 +103,7 @@ def bottleneck_dp(kg: KG, topic, scorer: ScoreFn, H: int, *, tau: float = INF, g
     answerable = np.ones(N, dtype=bool) if answer_mask is None else answer_mask.astype(bool).copy()
     answerable[topic] = False
     cand = np.full((H + 1, N), INF)
+    stop = np.full((H + 1, N), INF)
     best_cand = INF
 
     for h in range(1, H + 1):
@@ -135,13 +137,15 @@ def bottleneck_dp(kg: KG, topic, scorer: ScoreFn, H: int, *, tau: float = INF, g
             pred_rel[h, dst[best]] = rel[best]
         reached = np.flatnonzero((b[h] < INF) & answerable)
         if reached.size:
-            cand[h, reached] = np.maximum(b[h, reached], lam * scorer.stop_score(h, reached))
+            stop[h, reached] = lam * scorer.stop_score(h, reached)
+            cand[h, reached] = np.maximum(b[h, reached], stop[h, reached])
             best_cand = min(best_cand, float(cand[h].min()))
 
     sigma = cand.min(axis=0)
     best_hop = np.where(np.isfinite(sigma), cand.argmin(axis=0), -1).astype(np.int8)
+    tie = np.where(best_hop >= 0, stop[np.maximum(best_hop, 0), np.arange(N)], INF)
     return DPResult(b=b, cand=cand, sigma=sigma, best_hop=best_hop, pred_node=pred_node,
-                    pred_rel=pred_rel, states_expanded=states_expanded, edges_scored=edges_scored)
+                    pred_rel=pred_rel, states_expanded=states_expanded, edges_scored=edges_scored, tie=tie)
 
 
 def reachable_within(result: DPResult, answers, H: int) -> bool:

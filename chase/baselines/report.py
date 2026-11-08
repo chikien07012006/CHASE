@@ -29,12 +29,14 @@ def _usable(p: dict) -> bool:
     return np.isfinite(p["apss_mean"]) and p["apss_mean"] > 0 and p["infeasible_share"] == 0
 
 
-PLOTTED = ["Top-K", "CPR-style B=32", "UaG-style per-hop", "UaG-style Bonferroni"]   # the tables keep every variant
+PLOTTED = ["CPR-style B=32", "UaG-style per-hop", "UaG-style Bonferroni"]   # main figure; the tables keep every variant
+ABLATION = ["Top-K"]   # rank threshold on the same scorer: an ablation of CHASE's gap threshold, drawn apart
 INVALID = {"UaG-style per-hop": "no guarantee"}   # drawn dashed: coverage is not controlled, size is a lower bound
 
 
 def equal_coverage_figure(results: list[dict], out: Path, name: str = "fig_baselines_equal_coverage",
-                          methods: list[str] = PLOTTED) -> None:
+                          methods: list[str] = PLOTTED, title: str = "Same scorer, equal coverage (lower is better)",
+                          chase_label: str = "CHASE") -> None:
     """APSS against re-split mean coverage, same scorer for every method (log scale)."""
     plt = plots.plt
     plots._style()
@@ -59,15 +61,16 @@ def equal_coverage_figure(results: list[dict], out: Path, name: str = "fig_basel
     curves = [r["chase_curve"] for r in results]
     keep = [i for i in range(len(curves[0])) if all(_usable(c[i]) for c in curves)]
     ecr = 100 * np.mean([[c[i]["ecr_mean"] for i in keep] for c in curves], axis=0)
-    inside = (ecr >= min(xs) - 1) & (ecr <= max(xs) + 1) if xs else np.ones(len(keep), bool)
-    plots._seed_band(ax, ecr[inside], np.array([[c[i]["apss_mean"] for i in keep] for c in curves])[:, inside], "CHASE")
+    top = max(max(xs, default=0), 100 * (1 - lo)) + 1                  # CHASE up to the run's highest target
+    inside = (ecr >= min(xs) - 1) & (ecr <= top) if xs else np.ones(len(keep), bool)
+    plots._seed_band(ax, ecr[inside], np.array([[c[i]["apss_mean"] for i in keep] for c in curves])[:, inside], chase_label)
     if missing:
         ax.text(0.02, 0.02, "Not drawn (abstains at every level in some seed): " + ", ".join(missing),
                 transform=ax.transAxes, fontsize=7, color=plots.INK_2)
     ax.set_yscale("log")
     ax.set_xlabel("coverage, ECR (%) — re-split mean, levels with no abstention")
     ax.set_ylabel("APSS (log)")
-    ax.set_title("Same scorer, equal coverage (lower is better)")
+    ax.set_title(title)
     ax.legend(fontsize=7.5)
     plots._save(fig, out, name)
 
@@ -130,11 +133,14 @@ def main() -> None:
     md = [f"# Same-scorer baselines: {results[0]['dataset']}, {len(results)} seeds", "",
           "Runs: " + ", ".join(f"`{d}`" for d in args.runs), "",
           same_alpha_table(results), "", equal_coverage_table(results), "", cost_table(results), "",
-          "Figure: `fig_baselines_equal_coverage.png`."]
+          "Top-K is an ablation (rank threshold instead of CHASE's gap threshold, same scorer and calibration).", "",
+          "Figures: `fig_baselines_equal_coverage.png` (baselines), `fig_ablation_rank.png` (gap vs rank)."]
     (out / "baselines_compare.md").write_text("\n".join(md) + "\n")
     equal_coverage_figure(results, out, methods=args.plot)
+    equal_coverage_figure(results, out, name="fig_ablation_rank", methods=ABLATION,
+                          title="Gap vs rank threshold, same scorer (lower is better)", chase_label="CHASE (gap)")
     print("\n".join(md))
-    print(f"\nsaved to {out}: baselines_compare.md, fig_baselines_equal_coverage.png/pdf")
+    print(f"\nsaved to {out}: baselines_compare.md, fig_baselines_equal_coverage.png/pdf, fig_ablation_rank.png/pdf")
 
 
 if __name__ == "__main__":

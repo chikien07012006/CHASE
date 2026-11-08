@@ -1,6 +1,6 @@
 """Conformal top-K with the CHASE scorer.
 
-Rank every answerable node by sigma_v (ties broken by node id). The nonconformity score of a question is the
+Rank every answerable node by sigma_v, then by the tie score (the stop score, as CHASE), then by node id. The nonconformity score of a question is the
 rank of its best gold answer (INF if none is reachable). K_hat = the conformal quantile of these ranks; the set
 is the K_hat best nodes. Ranks are integers, so the scores tie and coverage is >= 1 - alpha but not tight.
 
@@ -15,10 +15,11 @@ from chase.search.dp import INF, DPResult
 from chase.train.evaluate import SigmaRecord
 
 
-def topk_record(res: DPResult, gold: np.ndarray, seconds: float = 0.0) -> SigmaRecord:
+def topk_record(res: DPResult, gold: np.ndarray, seconds: float = 0.0, tie_break: bool = True) -> SigmaRecord:
     s = res.sigma
+    t = res.tie if tie_break else np.zeros_like(s)
     cand = np.flatnonzero(np.isfinite(s))
-    order = cand[np.lexsort((cand, s[cand]))]          # by sigma, then node id
+    order = cand[np.lexsort((cand, t[cand], s[cand]))]          # by sigma, then tie score, then node id
     rank = np.full(len(s), INF)
     rank[order] = np.arange(1, order.size + 1)
     star = float(rank[gold].min()) if gold.size else INF

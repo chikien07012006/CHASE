@@ -19,7 +19,7 @@ from scipy import stats
 from chase.conformal.split import INF, conformal_quantile, covered
 from chase.eval import plots
 from chase.eval.reference import reference_for
-from chase.train.evaluate import SigmaRecord, collect_sigmas, set_sizes
+from chase.train.evaluate import LexKey, SigmaRecord, collect_sigmas, set_sizes
 
 ALPHAS = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
 GREEN, YELLOW, CYAN, BOLD, DIM, RESET = "\033[32m", "\033[33m", "\033[36m", "\033[1m", "\033[2m", "\033[0m"
@@ -174,7 +174,7 @@ def comparison_table(rows: list[dict], reference: dict, rho: float) -> str:
 # ------------------------------------------------------------------ pipeline
 
 def run(data: str, model: str, out: str, H: int, lam: float | None, alphas, main_alpha: float,
-        n_splits: int, dataset: str | None) -> None:
+        n_splits: int, dataset: str | None, tie_break: bool = True) -> None:
     from chase.data.splits import load_splits
     from chase.kg.subgraphs import SubgraphStore
     from chase.model.features import SubgraphFeatureStore
@@ -197,32 +197,39 @@ def run(data: str, model: str, out: str, H: int, lam: float | None, alphas, main
     t0 = time.time()
     with torch.no_grad():
         cal_store, cal_feats, cal_idx = open_split("cal")
-        cal = collect_sigmas(scorer, cal_store, cal_feats, cal_idx, H, lam, progress=True, desc="calibration (cal)")
+        cal = collect_sigmas(scorer, cal_store, cal_feats, cal_idx, H, lam, progress=True, desc="calibration (cal)",
+                             tie_break=tie_break)
         te_store, te_feats, te_idx = open_split("test")
-        test = collect_sigmas(scorer, te_store, te_feats, te_idx, H, lam, progress=True, desc="test, unpruned")
+        test_gap = collect_sigmas(scorer, te_store, te_feats, te_idx, H, lam, progress=True, desc="test, unpruned",
+                                  tie_break=tie_break)
+    # scores are (gap, tie) pairs in lexicographic order; LexKey turns them into exact scalar keys
+    lex = LexKey(cal + test_gap)
+    cal, test = lex.apply(cal), lex.apply(test_gap)
     rho = float(np.mean([np.isfinite(r.sigma_star) for r in test]))
-    print(f"{CYAN}cal {len(cal)} | test {len(test)} | test reachability ρ = {rho:.4f} | lam = {lam}{RESET}")
+    print(f"{CYAN}cal {len(cal)} | test {len(test)} | test reachability ρ = {rho:.4f} | lam = {lam} | "
+          f"tie-break {'stop score' if tie_break else 'none'}{RESET}")
 
     rows, sizes_by_alpha, per_q = [], {}, None
     states_unpruned = float(np.mean([r.states_expanded for r in test]))
     for a in alphas:
         row = metrics_at(cal, test, a)
+        key = row["tau"]                          # threshold on the keys; row["tau"] reports its gap
+        row["tau"] = lex.gap(key)
         row["states_unpruned_mean"] = states_unpruned
         if row["feasible"]:
             with torch.no_grad():
-                pruned = collect_sigmas(scorer, te_store, te_feats, te_idx, H, lam, tau=row["tau"], progress=True,
-                                        desc=f"test, pruned α={a}")
+                pruned = lex.apply(collect_sigmas(scorer, te_store, te_feats, te_idx, H, lam, tau=row["tau"],
+                                                  progress=True, desc=f"test, pruned α={a}", tie_break=tie_break))
             row.update(states_mean=float(np.mean([r.states_expanded for r in pruned])),
                        states_median=float(np.median([r.states_expanded for r in pruned])),
                        edges_mean=float(np.mean([r.edges_scored for r in pruned])),
                        ms_per_question=1000 * float(np.mean([r.seconds for r in pruned])),
-                       pruned_matches_unpruned=bool(np.array_equal(set_sizes(pruned, row["tau"]),
-                                                                   set_sizes(test, row["tau"]))))
-            sizes_by_alpha[a] = set_sizes(test, row["tau"])
+                       pruned_matches_unpruned=bool(np.array_equal(set_sizes(pruned, key), set_sizes(test, key))))
+            sizes_by_alpha[a] = set_sizes(test, key)
             if a == main_alpha:
                 per_q = pd.DataFrame({
                     "qid": te_store.questions.iloc[te_idx]["qid"].to_numpy(),
-                    "sigma_star": [r.sigma_star for r in test], "covered": covered([r.sigma_star for r in test], row["tau"]),
+                    "sigma_star": [r.sigma_star for r in test_gap], "covered": covered([r.sigma_star for r in test], key),
                     "set_size": sizes_by_alpha[a], "states_expanded": [r.states_expanded for r in pruned],
                     "edges_scored": [r.edges_scored for r in pruned], "ms": [1000 * r.seconds for r in pruned],
                     "best_hop": [r.best_hop for r in test], "topic_degree": [r.topic_degree for r in test]})
@@ -233,7 +240,8 @@ def run(data: str, model: str, out: str, H: int, lam: float | None, alphas, main
     feasible = [r["alpha"] for r in rows if r["feasible"]]
     summary = {"dataset": dataset, "model": model, "H": H, "lam": lam, "n_cal": len(cal), "n_test": len(test),
                "rho_test": rho, "min_feasible_alpha": min(feasible) if feasible else None,
-               "main_alpha": main_alpha, "rows": rows, "seconds": round(time.time() - t0, 1)}
+               "main_alpha": main_alpha, "tie_break": "stop" if tie_break else "none", "rows": rows,
+               "seconds": round(time.time() - t0, 1)}
     reference = reference_for(dataset)
     matched = matched_coverage(cal, test, reference, n_splits)
     (out_dir / "metrics.json").write_text(json.dumps(summary, indent=2, default=float))
@@ -286,8 +294,11 @@ def main() -> None:
     ap.add_argument("--main-alpha", type=float, default=0.1)
     ap.add_argument("--resplits", type=int, default=1000)
     ap.add_argument("--dataset", default=None, help="reference numbers to compare with (default: folder name)")
+    ap.add_argument("--tie-break", choices=["stop", "none"], default="stop",
+                    help="order candidates of equal sigma by their stop score (default) or keep ties whole (ablation)")
     args = ap.parse_args()
-    run(args.data, args.model, args.out, args.H, args.lam, args.alphas, args.main_alpha, args.resplits, args.dataset)
+    run(args.data, args.model, args.out, args.H, args.lam, args.alphas, args.main_alpha, args.resplits, args.dataset,
+        args.tie_break == "stop")
 
 
 if __name__ == "__main__":

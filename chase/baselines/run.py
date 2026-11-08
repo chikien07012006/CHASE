@@ -20,13 +20,14 @@ import torch
 from chase.baselines import beam, per_hop, topk
 from chase.eval.freebase import ALPHAS, _summarise, matched_coverage, metrics_at, ratio_cell, resplit_samples
 from chase.search.dp import INF, bottleneck_dp
-from chase.train.evaluate import SigmaRecord, to_gap
+from chase.train.evaluate import LexKey, SigmaRecord, record_from_dp, to_gap
 
 GRID = [round(a, 2) for a in np.arange(0.05, 0.86, 0.05)]       # re-split grid; contains ALPHAS
 CYAN, GREEN, RESET = "\033[36m", "\033[32m", "\033[0m"
 
 
-def collect(scorer, store, features, indices, H: int, lam: float, beams: list[int], desc: str) -> dict:
+def collect(scorer, store, features, indices, H: int, lam: float, beams: list[int], desc: str,
+            tie_break: bool = True) -> dict:
     """Per question: CHASE / top-K / beam records, per-hop components and table."""
     from tqdm import tqdm
     out = {"chase": [], "topk": [], "comp": [], "table": [], **{f"beam{b}": [] for b in beams}}
@@ -42,11 +43,8 @@ def collect(scorer, store, features, indices, H: int, lam: float, beams: list[in
         t0 = time.perf_counter()
         res = bottleneck_dp(kg, topic, bound, H, lam=lam, answer_mask=mask, keep_paths=True)
         t_dp = time.perf_counter() - t0
-        s = res.sigma
-        out["chase"].append(to_gap(SigmaRecord(sigma_star=res.sigma_star(gold), sorted_sigma=np.sort(s[np.isfinite(s)]),
-                                               states_expanded=res.states_expanded, edges_scored=res.edges_scored,
-                                               seconds=t_bind + t_dp)))
-        out["topk"].append(topk.topk_record(res, gold, seconds=t_bind + t_dp))
+        out["chase"].append(to_gap(record_from_dp(res, gold, tie_break=tie_break, seconds=t_bind + t_dp)))
+        out["topk"].append(topk.topk_record(res, gold, seconds=t_bind + t_dp, tie_break=tie_break))
         out["comp"].append(per_hop.walk_components(res, bound, gold, H, lam))
         out["table"].append(per_hop.per_hop_table(kg, topic, bound, res, gold, H, lam, mask))
         for b in beams:
@@ -139,7 +137,7 @@ def tables(methods: dict, matched: list[dict], alphas=ALPHAS) -> str:
 
 
 def run(data: str, model: str, out: str, H: int, beams: list[int], n_splits: int, n_splits_hop: int,
-        alphas=ALPHAS) -> None:
+        alphas=ALPHAS, tie_break: bool = True) -> None:
     from chase.data.splits import load_splits
     from chase.baselines.report import equal_coverage_figure
     from chase.kg.subgraphs import SubgraphStore
@@ -159,12 +157,16 @@ def run(data: str, model: str, out: str, H: int, beams: list[int], n_splits: int
             ref = splits[split]
             store = SubgraphStore.open(data, ref["store"])
             recs[split] = collect(scorer, store, SubgraphFeatureStore(store, data, ref["store"]), ref["indices"],
-                                  H, lam, beams, desc=split)
+                                  H, lam, beams, desc=split, tie_break=tie_break)
     print(f"{CYAN}cal {len(recs['cal']['chase'])} | test {len(recs['test']['chase'])} | {time.time() - t0:.0f}s; "
           f"calibrating and re-splitting{RESET}")
+    lex = LexKey(recs["cal"]["chase"] + recs["test"]["chase"])     # (gap, tie) pairs -> exact scalar keys
+    for split in ("cal", "test"):
+        recs[split]["chase"] = lex.apply(recs[split]["chase"])
     methods = evaluate(recs["cal"], recs["test"], beams, n_splits, n_splits_hop, alphas)
     matched = matched_coverage(recs["cal"]["chase"], recs["test"]["chase"], as_reference(methods, alphas), n_splits)
     result = {"dataset": Path(data).name, "model": model, "H": H, "lam": lam, "beams": beams, "alphas": alphas,
+              "tie_break": "stop" if tie_break else "none",
               "n_splits": n_splits,
               "n_splits_per_hop": n_splits_hop, "methods": methods, "matched": matched["points"],
               "chase_curve": matched["curve"]}
@@ -187,9 +189,11 @@ def main() -> None:
     ap.add_argument("--alphas", type=float, nargs="+", default=ALPHAS, help="levels of the tables (re-split grid adds them)")
     ap.add_argument("--resplits", type=int, default=1000)
     ap.add_argument("--resplits-per-hop", type=int, default=200, help="per-hop re-splits need a table pass each")
+    ap.add_argument("--tie-break", choices=["stop", "none"], default="stop",
+                    help="CHASE and top-K order equal sigma by the stop score (default) or keep ties whole (ablation)")
     args = ap.parse_args()
     run(args.data, args.model, args.out, args.H, args.beams, args.resplits, args.resplits_per_hop,
-        [round(a, 4) for a in args.alphas])
+        [round(a, 4) for a in args.alphas], args.tie_break == "stop")
 
 
 if __name__ == "__main__":
