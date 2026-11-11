@@ -7,6 +7,8 @@ All numbers use the default ordering of candidates by (gap, stop score) (`--tie-
 | Main tables, coverage checks | `runs/{webqsp,cwq}_seed{0,1,2}/eval/` (`metrics.json`, `validity.json`, `results_table.md`) |
 | Same α and equal coverage vs reported CPR / UaG | `runs/{webqsp,cwq}_compare/compare.md` |
 | Same-scorer baselines, gap-vs-rank ablation | `runs/{webqsp,cwq}_seed{0,1,2}/baselines/baselines.json`, `runs/{webqsp,cwq}_baselines/baselines_compare.md` |
+| Paired bootstrap | `runs/{webqsp,cwq,biohopr}_seed{0,1,2}/baselines/per_question.npz`, `runs/{webqsp,cwq,biohopr}_baselines/bootstrap.{md,json}` |
+| Stage-2 ablation | `runs/{webqsp,cwq,biohopr}_seed{0,1,2}/eval_stage1/` (stage-1 checkpoint `stage1_best.pt`) vs `.../eval/` |
 | Training | `runs/{webqsp,cwq}_seed{0,1,2}/history.json` (config included), `runs/{webqsp,cwq}_seed{0,1,2}.train.log` |
 
 "CPR (reported)" and "UaG (reported)" are the numbers in the CPR paper (arXiv 2605.08077). They use their own scorer, retrieval and split. "CPR-style" and "UaG-style" are our re-implementations on the CHASE scorer (see [baselines.md](baselines.md)).
@@ -115,6 +117,26 @@ Every method uses the same trained CHASE scorer, cal and test sets; only the way
 
 Figures: [webqsp_baselines.png](figures/webqsp_baselines.png), [cwq_baselines.png](figures/cwq_baselines.png).
 
+### Paired bootstrap
+
+Is the ratio larger than the sampling noise of the test questions? On the official test split, with cal and scorers fixed, the test questions are resampled with replacement 10,000 times, by cluster (the seed-question groups of the split: singletons on WebQSP, 344 groups on CWQ, 1,269 topic groups on BioHopR). Each resample is shared by both methods and all 3 seeds. On every resample, CHASE is re-calibrated to the smallest threshold whose ECR is ≥ the baseline's, and the ratio of APSS is averaged over seeds. 95% percentile CI; two-sided p for H0 ratio = 1, Holm-adjusted over the tested rows of each dataset (52 on WebQSP, 45 on CWQ, 92 on BioHopR). Rows below CHASE's Hit@1 floor (CHASE ECR > baseline ECR + 1 point) and levels where the baseline abstains in some seed are not tested. With 10,000 resamples the smallest attainable Holm p is about 0.01–0.02, so we report p < 0.05. Rows with identical sets at several α (the CPR rule saturates) are counted as separate tests, so the correction is conservative.
+
+Rows with p < 0.05 (Holm), by direction; "n" = tested rows; ratios of the significant rows.
+
+| Baseline | WebQSP | CWQ | BioHopR |
+|---|---|---|---|
+| UaG-style Bonferroni | CHASE smaller 5 / 5: **0.40–0.53** at 62–81% | abstains | abstains |
+| UaG-style per-hop (no guarantee) | CHASE smaller 2 / 2: **0.27–0.51** at 57–71% | CHASE smaller 2 / 2: **0.49–0.60** at 46–62% | CHASE smaller 5 / 5: **0.20–0.48** at 89.7–93.8% |
+| CPR-style B=128 | CHASE smaller 4 / 4: **0.37–0.74** at 59–88% | CHASE smaller 3 / 4: **0.64–0.85** at 39–60% | CHASE smaller 7 / 9: **0.15–0.78** at 89.0–91.9% |
+| CPR-style B=128, CPR rule | CHASE smaller 5 / 9: **0.78–0.87** at 60–89% | CHASE smaller 1 / 9: **0.88** at 53% | CHASE smaller 5 / 17: **0.50–0.69** at 90.1–90.7% |
+| CPR-style B=32 (both rules) | CHASE smaller 3 / 12 (0.52–0.80); baseline smaller 1 / 12 (1.13 at 75%) | CHASE smaller 5 / 12 (0.71–0.76) | CHASE smaller 1 / 23 (0.31) |
+| CPR-style B=8 (both rules) | baseline smaller 7 / 11: 1.34–1.64 at 61–77% | none of 11 | none of 21 |
+| Top-K (ablation) | CHASE smaller 1 / 9 (0.76 at 93%); baseline smaller 3 / 9: 1.67–2.12 at 66–79% | baseline smaller 1 / 7 (1.24 at 44%) | baseline smaller 10 / 17: 1.47–6.37 at 89.3–93.5% |
+
+- **Significant against UaG-style and wide beams on all three datasets.** Every significant row against UaG-style and CPR-style B=128 favours CHASE.
+- **Narrow beams are a trade-off, not a loss for them.** B = 8 is significantly smaller than CHASE on WebQSP at the levels it reaches and indistinguishable elsewhere; B = 32 is mostly indistinguishable. Their sets are small because the beam drops answers, which also caps their coverage (B = 8: 77% WebQSP, 53% CWQ, 91% BioHopR).
+- **BioHopR rows near the floor** (baseline ECR 0.2–1 point below 89.0%) have the point estimate at the edge of the CI (e.g. 0.16 [0.16, 1.14]): resampling moves the matched CHASE threshold on and off the floor. They are not used as evidence.
+
 ## Ablations
 
 **Gap vs rank threshold.** Conformal top-K keeps the scorer, the DP and the calibration, and replaces the gap by the rank (order by (σ, stop score, node id); calibrate the rank K̂ of the best gold answer). It is not a method of the literature; it isolates the choice of score.
@@ -125,6 +147,26 @@ Figures: [webqsp_baselines.png](figures/webqsp_baselines.png), [cwq_baselines.pn
 | Mid coverage | 1.60–2.16 at 66–81% | 1.08–1.22 at 45–61% |
 
 The scorer's ranking is good, but the gap of the gold answer varies across questions; a fixed K̂ exploits the ranking better at mid coverage, the gap is smaller where high coverage is needed. Figures: [webqsp_ablation_rank.png](figures/webqsp_ablation_rank.png), [cwq_ablation_rank.png](figures/cwq_ablation_rank.png).
+
+Under the paired bootstrap (official split, above), top-K's advantage is significant at mid coverage on WebQSP (66–79%) and BioHopR (89.3–93.5%), and on CWQ only at 44%. CHASE's advantage at high coverage is significant only on WebQSP at 93% (0.76); on CWQ at 79% (0.67) and BioHopR at 94–95% (0.83) it is not.
+
+**Conformal training (stage 2) vs BCE only (stage 1).** The stage-1 checkpoint (`stage1_best.pt`, early-stopped) is evaluated with the same pipeline. Official split, mean over 3 seeds, ECR % / APSS:
+
+| | α | Stage 1 (BCE) | Stage 2 (CHASE) | APSS change |
+|---|---|---|---|---|
+| WebQSP | 0.1 | 88.6 / 37.56 | 88.8 / 22.41 | −40% |
+| | 0.2 | 77.7 / 12.37 | 78.2 / 9.08 | −27% |
+| | 0.3 | 67.5 / 6.52 | 68.2 / 4.89 | −25% |
+| CWQ | 0.2 | 79.2 / 162.05 | 79.4 / 129.07 | −20% |
+| | 0.3 | 68.5 / 20.87 | 69.2 / 14.57 | −30% |
+| | 0.4 | 59.0 / 9.36 | 60.2 / 6.73 | −28% |
+| BioHopR | 0.05 | 93.5 / 111.93 | 93.3 / 45.75 | −59% |
+| | 0.06 | 92.4 / 72.80 | 92.7 / 33.37 | −54% |
+| | 0.07 | 91.2 / 51.03 | 91.7 / 25.80 | −49% |
+| | 0.08 | 90.4 / 41.13 | 90.7 / 18.22 | −56% |
+| Hit@1 | | 50.8 / 29.8 / 82.9% | 55.4 / 32.9 / 89.0% | WebQSP / CWQ / BioHopR |
+
+Coverage is on target for both stages (the guarantee does not depend on training); stage 2 shrinks the sets at every level above the floor, most at the training α, and raises Hit@1, which lowers the floor.
 
 **Tie-breaking.** With `--tie-break none` candidates are ordered by σ alone, and every node tied with the top candidate is returned. Wherever τ̂_g > 0 the sets are identical: a test question rarely has a node whose gap equals τ̂_g exactly. They differ only where τ̂_g = 0, at the floor and at levels just above it in some seeds (WebQSP α = 0.4: APSS 1.87 → 1.75). At the floor, APSS (official split, mean over seeds):
 
@@ -137,7 +179,8 @@ The scorer's ranking is good, but the gap of the gold answer varies across quest
 
 - **Floor at Hit@1** (55.4% WebQSP, 32.9% CWQ): CHASE cannot target lower coverage.
 - **Large sets near the reachability ceiling** (CWQ at 77–80%).
-- **A rank threshold wins at mid coverage** under the same scorer (ablation above).
+- **A rank threshold wins at mid coverage** under the same scorer (ablation above); the gap's advantage at high coverage is significant only on WebQSP.
+- **Narrow beams (B = 8) are not beaten** at the levels they reach: smaller sets on WebQSP, indistinguishable on CWQ and BioHopR.
 - **Stage 2 may not have converged:** the best checkpoint is at epoch 14–19 of 20 in 4 of 6 runs.
 - **WebQSP's small cal set** (283) makes the official-split coverage noisy, by ±2 points.
 

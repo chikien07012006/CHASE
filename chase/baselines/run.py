@@ -5,7 +5,8 @@ separately for each beam width. Every method is calibrated on the cal split and 
 (official split) and over random cal/test re-splits. "Equal coverage" calibrates CHASE at each baseline's
 re-split mean ECR, as chase.eval.freebase.matched_coverage does for published numbers.
 
-Writes baselines.json, baselines.md and fig_baselines_equal_coverage.png/pdf to --out.
+Writes baselines.json, baselines.md, per_question.npz (test set sizes and coverage, for chase.baselines.bootstrap)
+and fig_baselines_equal_coverage.png/pdf to --out.
 """
 from __future__ import annotations
 
@@ -18,9 +19,10 @@ import numpy as np
 import torch
 
 from chase.baselines import beam, per_hop, topk
+from chase.conformal.split import conformal_quantile, covered
 from chase.eval.freebase import ALPHAS, _summarise, matched_coverage, metrics_at, ratio_cell, resplit_samples
 from chase.search.dp import INF, bottleneck_dp
-from chase.train.evaluate import LexKey, SigmaRecord, record_from_dp, to_gap
+from chase.train.evaluate import LexKey, SigmaRecord, record_from_dp, set_sizes, to_gap
 
 GRID = [round(a, 2) for a in np.arange(0.05, 0.86, 0.05)]       # re-split grid; contains ALPHAS
 CYAN, GREEN, RESET = "\033[36m", "\033[32m", "\033[0m"
@@ -84,6 +86,55 @@ def evaluate(cal: dict, test: dict, beams: list[int], n_splits: int, n_splits_ho
     return methods
 
 
+def per_question(cal: dict, test: dict, beams: list[int], alphas=ALPHAS) -> dict:
+    """Official split, every baseline: set size and covered flag of each test question at each alpha
+    (calibrated on cal as in evaluate). Infeasible levels (tau_hat = INF) get size NaN."""
+    out = {}
+    scalar = {"Top-K": "topk", **{f"CPR-style B={b}": f"beam{b}" for b in beams}}
+    for name, key in scalar.items():
+        rows = []
+        for a in alphas:
+            tau = conformal_quantile([r.sigma_star for r in cal[key]], a)
+            ok = np.isfinite(tau)
+            rows.append((covered([r.sigma_star for r in test[key]], tau) if ok else np.zeros(len(test[key]), bool),
+                         set_sizes(test[key], tau) if ok else np.full(len(test[key]), np.nan)))
+        out[name] = rows
+    for b in beams:
+        key = f"beam{b}"
+        stars = np.array([r.sigma_star for r in test[key]])
+        rows = []
+        for a in alphas:
+            cov, size = beam._cpr_eval(stars, [r.sorted_sigma for r in test[key]],
+                                       np.array([r.top_is_gold for r in test[key]]),
+                                       np.array([beam.cpr_quantile([r.sigma_star for r in cal[key]], a)]))
+            rows.append((cov[0], size[0].astype(float)))
+        out[f"CPR-style B={b}, CPR rule"] = rows
+    for alloc, name in [("per_hop", "UaG-style per-hop"), ("bonferroni", "UaG-style Bonferroni")]:
+        rows = []
+        for a in alphas:
+            tau = per_hop.thresholds(cal["comp"], a, alloc)
+            if not np.isfinite(tau).all():
+                rows.append((np.zeros(len(test["table"]), bool), np.full(len(test["table"]), np.nan)))
+                continue
+            res = [t.evaluate(tau[None]) for t in test["table"]]
+            rows.append((np.array([c[0] for c, _ in res]), np.array([z[0] for _, z in res], dtype=float)))
+        out[name] = rows
+    return out
+
+
+def save_per_question(path: Path, pq: dict, chase: list[SigmaRecord], groups: np.ndarray, alphas) -> None:
+    """per_question.npz: baselines [M, A, n] and CHASE's keyed test records (ragged keys as concat + offsets)."""
+    names = list(pq)
+    keys = [r.sorted_sigma for r in chase]
+    np.savez_compressed(
+        path, methods=np.array(names), alphas=np.array(alphas, dtype=float), groups=np.asarray(groups),
+        cov=np.array([[c for c, _ in pq[n]] for n in names], dtype=bool),
+        size=np.array([[z for _, z in pq[n]] for n in names], dtype=np.float32),
+        chase_star=np.array([r.sigma_star for r in chase]), chase_top=np.array([r.top_sigma for r in chase]),
+        chase_keys=np.concatenate(keys) if keys else np.zeros(0),
+        chase_offsets=np.r_[0, np.cumsum([len(k) for k in keys])])
+
+
 def as_reference(methods: dict, alphas=ALPHAS) -> dict:
     """Baselines' re-split means in the {method: {alpha: (ECR %, APSS)}} form used for published numbers."""
     ref = {}
@@ -138,7 +189,7 @@ def tables(methods: dict, matched: list[dict], alphas=ALPHAS) -> str:
 
 def run(data: str, model: str, out: str, H: int, beams: list[int], n_splits: int, n_splits_hop: int,
         alphas=ALPHAS, tie_break: bool = True) -> None:
-    from chase.data.splits import load_splits
+    from chase.data.splits import load_splits, seed_groups
     from chase.baselines.report import equal_coverage_figure
     from chase.kg.subgraphs import SubgraphStore
     from chase.model.features import SubgraphFeatureStore
@@ -158,6 +209,8 @@ def run(data: str, model: str, out: str, H: int, beams: list[int], n_splits: int
             store = SubgraphStore.open(data, ref["store"])
             recs[split] = collect(scorer, store, SubgraphFeatureStore(store, data, ref["store"]), ref["indices"],
                                   H, lam, beams, desc=split, tie_break=tie_break)
+            if split == "test":           # bootstrap clusters: the groups used to split the data
+                groups = seed_groups(store.questions["qid"].iloc[ref["indices"]].reset_index(drop=True))
     print(f"{CYAN}cal {len(recs['cal']['chase'])} | test {len(recs['test']['chase'])} | {time.time() - t0:.0f}s; "
           f"calibrating and re-splitting{RESET}")
     lex = LexKey(recs["cal"]["chase"] + recs["test"]["chase"])     # (gap, tie) pairs -> exact scalar keys
@@ -171,11 +224,13 @@ def run(data: str, model: str, out: str, H: int, beams: list[int], n_splits: int
               "n_splits_per_hop": n_splits_hop, "methods": methods, "matched": matched["points"],
               "chase_curve": matched["curve"]}
     (out_dir / "baselines.json").write_text(json.dumps(result, indent=2, default=float))
+    save_per_question(out_dir / "per_question.npz", per_question(recs["cal"], recs["test"], beams, alphas),
+                      recs["test"]["chase"], groups, alphas)
     md = tables(methods, matched["points"], alphas)
     (out_dir / "baselines.md").write_text(f"# Same-scorer baselines: {result['dataset']}\n\nModel: `{model}`\n\n{md}\n")
     equal_coverage_figure([result], out_dir)
     print(md)
-    print(f"\n{GREEN}saved to {out_dir}: baselines.json, baselines.md, fig_baselines_equal_coverage | "
+    print(f"\n{GREEN}saved to {out_dir}: baselines.json, baselines.md, per_question.npz, fig_baselines_equal_coverage | "
           f"{time.time() - t0:.0f}s{RESET}")
 
 
