@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+from matplotlib.ticker import MaxNLocator
 
 from chase.eval import plots
 from chase.eval.compare import _ms
@@ -73,6 +74,81 @@ def equal_coverage_figure(results: list[dict], out: Path, name: str = "fig_basel
     ax.set_title(title)
     ax.legend(fontsize=7.5)
     plots._save(fig, out, name)
+
+
+COVERAGE = ["CPR-style B=32", "CPR-style B=32, CPR rule", "UaG-style per-hop", "UaG-style Bonferroni"]
+MARKER = {"CPR-style": "s", "UaG-style per-hop": "^", "UaG-style Bonferroni": "v"}
+
+
+def coverage_target_figure(per_dataset: dict[str, list[dict]], out: Path, name: str = "fig_coverage_vs_target",
+                           methods: list[str] = COVERAGE) -> None:
+    """Requested coverage 1 - alpha vs re-split mean ECR, one panel per dataset, mean over seeds.
+    A level is drawn only if no re-split of any seed abstained there."""
+    plt = plots.plt
+    plots._style()
+    fig, axes = plt.subplots(1, len(per_dataset), figsize=(7.0, 2.6), squeeze=False)
+    handles, abstains = {}, {}
+    for ax, (title, results) in zip(axes[0], per_dataset.items()):
+        alphas = [str(a) for a in results[0]["alphas"]]
+        targets = [100 * (1 - float(a)) for a in alphas]
+        lo, hi = min(targets) - 2, max(targets) + 2
+        ys_all = []
+        for nm in ["CHASE"] + methods:
+            if nm not in results[0]["methods"]:
+                continue
+            rs = [r["methods"][nm]["resplit"] for r in results]
+            pts = [(100 * (1 - float(a)), 100 * np.mean([x[a]["ecr_mean"] for x in rs]))
+                   for a in alphas if all(a in x and _usable(x[a]) for x in rs)]
+            if not pts:
+                abstains.setdefault(nm, []).append(title)
+                continue
+            x, y = map(np.array, zip(*pts))
+            ys_all += list(y)
+            if nm == "CHASE":
+                (h,) = ax.plot(x, y, "o-", color=plots.METHOD_COLOUR["CHASE"], ms=3, lw=1.8, zorder=5, label=nm)
+            else:
+                rule = "CPR rule" in nm
+                c = _colour(nm, [32])
+                (h,) = ax.plot(x, y, "--" if rule else "-", marker=next(m for k, m in MARKER.items() if nm.startswith(k)),
+                               color=c, ms=3, lw=1.1, mfc="none" if rule else c, label=nm)
+            handles.setdefault(nm, h)
+        rho = 100 * np.mean([r["methods"]["CHASE"]["cost"]["reach"] for r in results])
+        y_lo = min(ys_all + [lo]) - 2
+        y_hi = max(ys_all + [hi, rho]) + 2
+        h = ax.plot([min(lo, y_lo), max(hi, y_hi)], [min(lo, y_lo), max(hi, y_hi)], ":", color=plots.INK_2, lw=0.9,
+                    label="target (y = x)")[0]
+        handles.setdefault("target", h)
+        ax.axhline(rho, color=plots.INK_2, lw=0.7)
+        ax.text(lo + 0.5, rho - 0.4, f"ρ = {rho:.1f}%", fontsize=6.5, color=plots.INK_2, va="top")
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(y_lo, y_hi)
+        ax.set_title(title, fontsize=9.5)
+        ax.tick_params(labelsize=7.5)
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=5, integer=True))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=5, integer=True))
+    axes[0][0].set_ylabel("empirical coverage, ECR (%)", fontsize=8.5)
+    axes[0][len(per_dataset) // 2].set_xlabel("requested coverage 1 − α (%)", fontsize=8.5)
+    labels = [f"{nm} (abstains on {', '.join(abstains[nm])})" if nm in abstains else nm for nm in handles]
+    fig.legend(handles.values(), labels, loc="upper center", ncol=3, fontsize=6.5,
+               frameon=False, bbox_to_anchor=(0.5, 1.02))
+    fig.tight_layout(rect=(0, 0, 1, 0.88))
+    for ext in ("png", "pdf"):
+        fig.savefig(out / f"{name}.{ext}", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def coverage_main(argv: list[str]) -> None:
+    ap = argparse.ArgumentParser(description="Figure: requested vs achieved coverage, same-scorer baselines, all datasets")
+    ap.add_argument("--webqsp", nargs="+", required=True, help="runs/webqsp_seed*/baselines")
+    ap.add_argument("--cwq", nargs="+", required=True, help="runs/cwq_seed*/baselines")
+    ap.add_argument("--biohopr", nargs="+", required=True, help="runs/biohopr_seed*/baselines")
+    ap.add_argument("--out", required=True, help="e.g. runs/figures")
+    args = ap.parse_args(argv)
+    load = lambda ds: [json.loads((Path(d) / "baselines.json").read_text()) for d in ds]  # noqa: E731
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    coverage_target_figure({"WebQSP": load(args.webqsp), "CWQ": load(args.cwq), "BioHopR": load(args.biohopr)}, out)
+    print(f"saved to {out}: fig_coverage_vs_target.png/pdf")
 
 
 def same_alpha_table(results: list[dict]) -> str:
@@ -144,4 +220,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    if sys.argv[1:2] == ["coverage"]:
+        coverage_main(sys.argv[2:])
+    else:
+        main()

@@ -164,3 +164,27 @@ def test_gap_record_is_sigma_measured_from_the_best_node():
     assert set_sizes([g], 0.35)[0] == set_sizes([rec], 0.75)[0] == 2
     empty = SigmaRecord(sigma_star=INF, sorted_sigma=np.array([]), states_expanded=0)
     assert to_gap(empty).sigma_star == INF
+
+
+def test_coverage_figure_skips_abstaining_levels(tmp_path, monkeypatch):
+    from chase.baselines import report
+
+    def run(abstain_share):
+        def pt(ecr, inf=0.0):
+            return {"ecr_mean": ecr, "apss_mean": 2.0, "infeasible_share": inf}
+        return {"alphas": [0.1, 0.3, 0.5], "methods": {
+            "CHASE": {"resplit": {"0.1": pt(0.9), "0.3": pt(0.7), "0.5": pt(0.5)}, "cost": {"reach": 0.95}},
+            "UaG-style per-hop": {"resplit": {"0.1": pt(0.85, abstain_share), "0.3": pt(0.6), "0.5": pt(0.4)}}}}
+
+    drawn = {}
+    plot = report.plots.plt.Axes.plot
+
+    def spy(self, *args, label=None, **kw):
+        drawn[label] = list(args[0])
+        return plot(self, *args, label=label, **kw)
+
+    monkeypatch.setattr(report.plots.plt.Axes, "plot", spy)
+    report.coverage_target_figure({"D": [run(0.0), run(0.2)]}, tmp_path, methods=["UaG-style per-hop"])
+    assert (tmp_path / "fig_coverage_vs_target.pdf").exists()
+    assert drawn["CHASE"] == pytest.approx([90, 70, 50])
+    assert drawn["UaG-style per-hop"] == pytest.approx([70, 50])           # 90% abstains in one seed: skipped

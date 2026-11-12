@@ -8,18 +8,15 @@
 
 ![status](https://img.shields.io/badge/status-research%20in%20progress-2a78d6)
 ![python](https://img.shields.io/badge/python-3.11-52514e)
-![tests](https://img.shields.io/badge/tests-356%20passing-1baf7a)
+![tests](https://img.shields.io/badge/tests-357%20passing-1baf7a)
 ![llm](https://img.shields.io/badge/LLM%20calls-0-52514e)
 
 </div>
-
-> **Status (11 Nov 2026).** The full pipeline (graphs → scorer → bottleneck DP → conformal calibration → two-stage training → official evaluation) is implemented and tested. Results on **WebQSP**, **CWQ** and **BioHopR** (3 seeds each), the comparison with reported CPR / UaG, the same-scorer baselines with a paired bootstrap, and the ablations (gap vs rank, conformal training, tie-breaking) are in [`docs/results.md`](docs/results.md) and [BioHopR](#biohopr). Next: paper.
-
 ---
 
 ## Contents
 
-[Motivation](#motivation) · [Method](#method) · [Results](#results) · [Benchmarks](#benchmarks) · [Repository layout](#repository-layout) · [Setup](#setup) · [Reproducing](#reproducing-the-results) · [Testing](#testing) · [Roadmap](#roadmap)
+[Motivation](#motivation) · [Method](#method) · [Results](#results) · [Benchmarks](#benchmarks) · [Repository layout](#repository-layout) · [Setup](#setup) · [Reproducing](#reproducing-the-results) · [Testing](#testing)
 
 ---
 
@@ -201,31 +198,20 @@ python -m chase.baselines.run --data $D --model runs/biohopr_seed0/best.pt --out
 
 `--alphas` sets the levels of the tables; the baseline figures are drawn over that α range only. `--tie-break none` (eval and baselines) orders candidates by σ alone, for the ablation.
 
-`report` writes `baselines_compare.md`, `fig_baselines_equal_coverage` (CHASE vs CPR-style and UaG-style) and `fig_ablation_rank` (CHASE vs top-K). `run` also saves per-question coverage and sizes (`per_question.npz`), which `bootstrap` resamples into `bootstrap.md` / `bootstrap.json`.
+`report` writes `baselines_compare.md`, `fig_baselines_equal_coverage` (CHASE vs CPR-style and UaG-style) and `fig_ablation_rank` (CHASE vs top-K). `run` also saves per-question coverage and sizes (`per_question.npz`), which `bootstrap` resamples into `bootstrap.md` / `bootstrap.json`. Once all three datasets are done, `report coverage` draws requested vs empirical coverage for CHASE and the same-scorer baselines, one panel per dataset (`fig_coverage_vs_target`):
+
+```bash
+python -m chase.baselines.report coverage --webqsp runs/webqsp_seed{0,1,2}/baselines \
+    --cwq runs/cwq_seed{0,1,2}/baselines --biohopr runs/biohopr_seed{0,1,2}/baselines --out runs/figures
+```
 
 ## Testing
 
 ```bash
-python -m pytest tests -q        # 356 tests, ~20 s
+python -m pytest tests -q        # 357 tests, ~20 s
 ```
 
 The key invariants are checked against brute force: the DP's σ equals enumeration of every walk; a pruned search returns exactly the unpruned answer set; the soft DP converges to the hard DP as T → 0; split-conformal and CRC thresholds meet their guarantees in simulation; `bind()` lookup tables equal the full forward pass.
-
-## Roadmap
-
-- [x] Full PrimeKG graph; WebQSP / CWQ subgraph stores; MiniLM caches
-- [x] State-based scorer, type feasibility, bottleneck DP, reachability ceilings
-- [x] Conformal calibration (split CP, CRC)
-- [x] Gold paths, sampler, two-stage training (BCE + conformal training)
-- [x] Official evaluation, 1000-re-split validity check, figures
-- [x] WebQSP / CWQ results, 3 seeds each
-- [x] Same-α and equal-coverage comparison with reported CPR / UaG; theory note
-- [x] Same-scorer baselines: per-hop (UaG-style), Bonferroni, fixed beam + post-hoc (CPR-style), conformal top-K
-- [x] BioHopR store (name linking, type-feasible subgraphs, topic-grouped split); 3 seeds; same-scorer baselines
-- [x] Tie-breaking by the stop score (ablation: `--tie-break none`)
-- [x] Paired cluster bootstrap; ablation of conformal training (stage 1 vs 2)
-- [ ] BioHopR: CRC for multi-answer recall; Mondrian by hop count
-- [ ] Paper
 
 ## Citation
 
